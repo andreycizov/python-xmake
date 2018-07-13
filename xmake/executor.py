@@ -40,7 +40,7 @@ class Executor:
         # todo if there are no items in the queue, no items are running, then there are dependency cycles
 
         while len(self.deps.queue):
-            state, item = self.deps.queue[0]
+            state, item = self.deps.pop()
 
             if self.debug_logging:
                 logging.getLogger(__name__ + '.ep').debug('%s %s', state, item)
@@ -72,7 +72,7 @@ class Executor:
                 )
 
             if item is None:
-                assert len(self.deps.queue) == 1, self.deps.queue
+                assert len(self.deps.queue) == 0, self.deps.queue
                 return self.deps.dependency_results((JobState.Result, None))[0]
 
             ret = None
@@ -80,36 +80,16 @@ class Executor:
             attr = getattr(self, 'execute_' + state.value.lower(), None)
 
             if attr:
-                ret = attr(*self.deps.queue.popleft())
+                ret = attr(state, item)
             else:
-                raise NotImplementedError(f"Can't do anything here: {state} {top}")
+                raise NotImplementedError(f"Can't do anything here: {state} {item}")
 
             logging.getLogger(__name__ + '.op').debug('%s %s %s', state, item, ret)
 
             self.deps.resolve_depends((state, item), ret)
 
-    def execute_deps(self, state, item):
-        item_deps = item.dependencies()
-
-        for x in item_deps:
-            self.push_dep(JobState.Exec, item, x)
-
-        return item_deps
-
-    def execute_exec(self, state, top):
-        # todo only exec and postexec are expected to be run in a separate process.
-        deps_on = self.deps.depends_on((JobState.Exec, top))
-        if len(deps_on):
-            raise NotImplementedError(f"Can't do anything here [1]: {state} {top} {deps_on}")
-        top_dep_rets = self.deps.dependency_results((JobState.Exec, top))[1:]
-        logging.getLogger(__name__ + '.dep_rets').debug('%s', top_dep_rets)
-        top_ret = top.execute(*top_dep_rets)
-        logging.getLogger(__name__ + '.ret').debug('%s', top_ret)
-
-        return top_ret
-
     def _get_deps(self, item):
-        ret = self.deps.dependency_results((JobState.Exec, item))[:1]
+        ret = self.deps.dependency_results((JobState.Exec, item))[1:]
 
         return ret
 
@@ -136,6 +116,26 @@ class Executor:
             self.push_dep(JobState.PostExec, item, x)
 
         return post_deps
+
+    def execute_deps(self, state, item):
+        item_deps = item.dependencies()
+
+        for x in item_deps:
+            self.push_dep(JobState.Exec, item, x)
+
+        return item_deps
+
+    def execute_exec(self, state, top):
+        # todo only exec and postexec are expected to be run in a separate process.
+        deps_on = self.deps.depends_on((JobState.Exec, top))
+        if len(deps_on):
+            raise NotImplementedError(f"Can't do anything here [1]: {state} {top} {deps_on}")
+        top_dep_rets = self._get_deps(top)
+        logging.getLogger(__name__ + '.dep_rets').debug('%s', top_dep_rets)
+        top_ret = top.execute(*top_dep_rets)
+        logging.getLogger(__name__ + '.ret').debug('%s', top_ret)
+
+        return top_ret
 
     def execute_postexec(self, state, item):
         # todo only exec and postexec are expected to be run in a separate process.
