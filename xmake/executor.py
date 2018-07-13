@@ -19,7 +19,7 @@ class LazyLog:
 @dataclass()
 class Executor:
     deps: Optional[DependencyIndex] = None
-    debug_logging = False
+    debug_logging: bool = False
 
     def push_dep(self, state, item, x):
         self.deps.add_depends((state, item), (JobState.Result, x))
@@ -108,15 +108,29 @@ class Executor:
 
         return top_ret
 
-    def execute_postdeps(self, state, item):
-        # ret_prev = deps.dependency_results((JobState.Deps, item))
+    def _get_deps(self, item):
         ret = self.deps.dependency_results((JobState.Exec, item))[:1]
 
-        logging.getLogger(__name__ + '.post_dep_rets').debug('%s', ret)
+        return ret
 
-        post_deps = item.post_dependencies(*ret)
+    def _get_postdeps(self, item):
+        _, *ret_prev = self.deps.dependency_results((JobState.PostExec, item))
+        # assert len(ret_prev) == 1, ret_prev
+        return ret_prev
 
-        logging.getLogger(__name__ + '.post_dep_rets_deps').debug('%s', post_deps)
+    def _get_exec(self, item):
+        ret_prev, = self.deps.dependency_results((JobState.PostDeps, item))
+        return ret_prev
+
+    def _get_postexec(self, item):
+        dep_ret = self.deps.dependency_results((JobState.Result, item))
+        ret = dep_ret[-1]
+        return ret
+
+    def execute_postdeps(self, state, item):
+        # ret_prev = deps.dependency_results((JobState.Deps, item))
+
+        post_deps = item.post_dependencies(self._get_exec(item), *self._get_deps(item))
 
         for x in post_deps:
             self.push_dep(JobState.PostExec, item, x)
@@ -126,22 +140,21 @@ class Executor:
     def execute_postexec(self, state, item):
         # todo only exec and postexec are expected to be run in a separate process.
 
-        ret_prev = self.deps.dependency_results((JobState.PostDeps, item))
-        post_deps, *ret = self.deps.dependency_results((JobState.PostExec, item))
+        ret = self._get_exec(item)
+        deps = self._get_deps(item)
+        postdeps = self._get_postdeps(item)
         # post_deps is a result returned by execute_postdeps (list of dependencies)
         # what is ret ? there will be as many rets as there are post_deps
 
         logging.getLogger(__name__).getChild('execute_postexec').debug('%s', ret)
 
-        ret = item.post_execute(ret_prev, ret)
+        ret = item.post_execute(ret, deps, postdeps)
 
         return ret
 
     def execute_result(self, state, item):
-        dep_ret = self.deps.dependency_results((JobState.Result, item))
-        ret = dep_ret[-1]
-
-        logging.getLogger(__name__).getChild('execute_result').debug('%s', dep_ret)
+        ret = self._get_postexec(item)
+        logging.getLogger(__name__).getChild('execute_result').debug('%s', ret)
 
         resolved = self.deps.resolve_depends((JobState.Result, item), ret)
 
