@@ -65,18 +65,18 @@ class Container(Obj):
     pass
 
 
-@classmethod
+@dataclass()
 class Docker(Op):
     conf: Op = Var('docker')
 
     def dependencies(self) -> List['Op']:
         return [self.conf]
 
-    def execute(self, *args: Any):
-        return build_context_get('docker')
+    def execute(self, arg: DockerClient):
+        return DockerClient(arg)
 
 
-class DockerOp:
+class DockerOp(Op):
     def dependencies(self) -> List[Op]:
         return [Docker()]
 
@@ -146,7 +146,7 @@ ContainerPutFiles = Dict[str, Tuple[tarfile.TarInfo, bytes]]
 
 
 @dataclass()
-class ContainerPut(Op, DockerOp):
+class ContainerPut(DockerOp):
     c: Container
     path: str
     files: ContainerPutFiles
@@ -218,7 +218,7 @@ class DockerAuth:
 
 
 @dataclass()
-class ImageList(Op, DockerOp):
+class ImageList(DockerOp):
     name: str = None
     quiet: bool = False
     all: bool = True
@@ -229,7 +229,7 @@ class ImageList(Op, DockerOp):
 
 
 @dataclass()
-class ImagePull(Op, DockerOp):
+class ImagePull(DockerOp):
     tag: str
     auth: Optional[DockerAuth] = None
 
@@ -238,12 +238,21 @@ class ImagePull(Op, DockerOp):
         auth_config = None
         if self.auth:
             auth_config = {'username': self.auth.username, 'password': self.auth.password}
-        for x in c.api.pull(repo, tag, auth_config=auth_config, stream=True, decode=True):
-            logging.getLogger(__name__ + f'.{self.__class__.__name__}').debug('%s', x)
+
+        stream = True
+
+        r = c.api.pull(repo, tag, auth_config=auth_config, stream=stream, decode=True)
+
+        if stream:
+            for x in r:
+                print(x)
+                logging.getLogger(__name__ + f'.{self.__class__.__name__}').debug('%s', x)
+        else:
+            return r
 
 
 @dataclass()
-class ImageTag(Op, DockerOp):
+class ImageTag(DockerOp):
     i: Image
     tag: str
 
@@ -254,7 +263,7 @@ class ImageTag(Op, DockerOp):
 
 
 @dataclass()
-class ExecCreate(Op, DockerOp):
+class ExecCreate(DockerOp):
     c: Container
     command: List[str]
 
@@ -263,7 +272,7 @@ class ExecCreate(Op, DockerOp):
 
 
 @dataclass()
-class ExecStart(Op, DockerOp):
+class ExecStart(DockerOp):
     e: Exec
 
     def execute(self, c: DockerClient):
@@ -281,7 +290,7 @@ class ExecStart(Op, DockerOp):
 
 
 @dataclass()
-class ContainerList(Op, DockerOp):
+class ContainerList(DockerOp):
     quiet: bool = False
     all: bool = True
     filters: Optional[Dict[str, Union[List[str], str]]] = None
@@ -291,7 +300,7 @@ class ContainerList(Op, DockerOp):
 
 
 @dataclass()
-class ContainerCreate(Op, DockerOp):
+class ContainerCreate(DockerOp):
     i: Image
     name: Optional[str] = None
     command: List[str] = field(default_factory=list)
@@ -308,7 +317,7 @@ class ContainerCreate(Op, DockerOp):
 
 
 @dataclass()
-class ContainerKill(Op, DockerOp):
+class ContainerKill(DockerOp):
     c: Container
     signal: int = SIGTERM
 
@@ -317,7 +326,7 @@ class ContainerKill(Op, DockerOp):
 
 
 @dataclass()
-class ContainerRemove(Op, DockerOp):
+class ContainerRemove(DockerOp):
     c: Container
     v = True
     link = False
@@ -330,7 +339,7 @@ class ContainerRemove(Op, DockerOp):
 
 
 @dataclass()
-class ContainerStart(Op, DockerOp):
+class ContainerStart(DockerOp):
     c: Container
 
     def execute(self, c: DockerClient):
@@ -343,7 +352,7 @@ class ContainerStart(Op, DockerOp):
 
 
 @dataclass()
-class ContainerCommit(Op, DockerOp):
+class ContainerCommit(DockerOp):
     c: Container
     tag: Optional[str] = None
     message: Optional[str] = None
@@ -361,7 +370,7 @@ class ContainerCommit(Op, DockerOp):
 
 
 @dataclass()
-class ContainerPause(Op, DockerOp):
+class ContainerPause(DockerOp):
     c: Container
 
     def execute(self, c: DockerClient):
@@ -374,7 +383,7 @@ class ContainerPause(Op, DockerOp):
 
 
 @dataclass()
-class NetworkCreate(Op, DockerOp):
+class NetworkCreate(DockerOp):
     n: Network
     name: str
     driver: str = 'bridge'
@@ -399,7 +408,7 @@ class NetworkCreate(Op, DockerOp):
 
 
 @dataclass()
-class ContainerNetworkAssign(Op, DockerOp):
+class ContainerNetworkAssign(DockerOp):
     c: Container
     n: Network
     aliases: List[str] = field(default_factory=list)

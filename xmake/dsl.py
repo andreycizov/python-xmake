@@ -322,7 +322,7 @@ class Call(Op):
         return ctx, [fun.body]
 
     def context_post_execute(self, ctx: Ctx, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> \
-    Tuple[Ctx, TPostRes]:
+            Tuple[Ctx, TPostRes]:
         fun, args = execute_ret
         assert isinstance(fun, Fun), fun
 
@@ -331,7 +331,7 @@ class Call(Op):
         return ctx, post_result[0]
 
 
-@dataclass(unsafe_hash=True, init=False, repr=False)
+@dataclass()
 class Seq(Op):
     ops: List[Op]
 
@@ -356,3 +356,21 @@ class Seq(Op):
 
     def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
         return [execute_ret] + (post_result[0] if len(self.ops) > 1 else [])
+
+
+@dataclass()
+class Par(Op):
+    ops: List[Op]
+
+    def __init__(self, *ops: Op):
+        self.ops = list(ops)
+
+    def __repr__(self) -> str:
+        r = ', '.join(str(x) for x in self.ops)
+        return f'{self.__class__.__name__}({r})'
+
+    def dependencies(self) -> List['Op']:
+        return self.ops
+
+    def execute(self, *args: Any) -> TRes:
+        return list(args)
