@@ -1,6 +1,6 @@
 import unittest
 
-from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case
+from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call
 from xmake.executor import Executor
 
 
@@ -85,5 +85,21 @@ class TestDSL(unittest.TestCase):
         )
 
         self.assertEqual('c', r)
+
+    def test_fun_0(self):
+        ex = Executor()
+
+        r = ex.execute(
+            With(
+                Var('fn'),
+                Fun(
+                    Var('x'), Var('y'), Var('z'),
+                    Eval(lambda x, y, z: [x, y, z], Var('x'), Var('y'), Var('z')),
+                ),
+                Call(Var('fn'), Con(5), Con(6), Con(7))
+            )
+        )
+
+        self.assertEqual([5, 6, 7], r)
 
 

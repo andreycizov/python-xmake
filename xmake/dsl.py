@@ -23,7 +23,8 @@ class Ctx:
         return Ctx(self.mappings + [(n, val)])
 
     def pop(self, n: str) -> Any:
-        for idx, (cn, cv) in enumerate(list(self.mappings[::-1])):
+        idxs = range(len(self.mappings) - 1, -1, -1)
+        for idx, (cn, cv) in ((idx, self.mappings[idx]) for idx in idxs):
             if cn == n:
                 return Ctx(self.mappings[:idx] + self.mappings[idx + 1:])
         else:
@@ -64,6 +65,14 @@ class Op:
     def context_enter(self, ctx: Ctx, res: TRes, *args: Any) -> Ctx:
         return ctx
 
+    def context_post_dependencies(self, ctx: Ctx, result: TRes, *pre_result: List[TRes]) -> Tuple[Ctx, List['Op']]:
+        """
+        :param result: what is returned by ``execute``
+        :param pre_result: what is returned by ``execute`` for every dependency returned by ``dependencies``
+        :return: list of dependencies to execute before ``post_execute``
+        """
+        return ctx, self.post_dependencies(result, pre_result)
+
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         """
         :param result: what is returned by ``execute``
@@ -71,16 +80,6 @@ class Op:
         :return: list of dependencies to execute before ``post_execute``
         """
         return []
-
-    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
-        """
-        :param execute_ret: what is returned by ``execute``
-        :param pre_result: what is returned by every dependency returned by ``dependencies``
-        :param post_result: what is returned by every dependency returned by ``post_dependencies``
-        :return:
-        """
-        self.logger.getChild('post_execute').debug('%s %s', pre_result, post_result)
-        return execute_ret
 
     def context_post_execute(
             self,
@@ -95,6 +94,16 @@ class Op:
 
     def context_exit(self, ctx: Ctx, ret: TPostRes, pre_result: List[TRes], post_result: List[TPostRes]) -> Ctx:
         return ctx
+
+    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
+        """
+        :param execute_ret: what is returned by ``execute``
+        :param pre_result: what is returned by every dependency returned by ``dependencies``
+        :param post_result: what is returned by every dependency returned by ``post_dependencies``
+        :return:
+        """
+        self.logger.getChild('post_execute').debug('%s %s', pre_result, post_result)
+        return execute_ret
 
 
 @dataclass()
@@ -266,6 +275,60 @@ class Match(Op):
             return None
         else:
             return post_result[0]
+
+
+@dataclass(init=False)
+class Fun(Op):
+    args: List[Var]
+    body: Op
+
+    def __init__(self, *params: Union[Var, Op]):
+        *args, body = params
+
+        for arg in args:
+            assert isinstance(arg, Var)
+
+        assert isinstance(body, Op)
+
+        self.args = args
+        self.body = body
+
+    def execute(self, *args: Any):
+        return self
+
+
+@dataclass(init=False)
+class Call(Op):
+    fun: Op
+    args: List[Op]
+
+    def __init__(self, fun: Op, *args: Op):
+        self.fun = fun
+        self.args = list(args)
+
+    def dependencies(self) -> List['Op']:
+        return [self.fun] + self.args
+
+    def execute(self, fun: Fun, *args: Any) -> TRes:
+        return fun, args
+
+    def context_post_dependencies(self, ctx: Ctx, result: TRes, *pre_result: List[TRes]) -> Tuple[Ctx, List['Op']]:
+        fun, args = result
+        assert isinstance(fun, Fun), fun
+
+        for var, val in zip(fun.args, args):
+            ctx = ctx.push(var.name, val)
+
+        return ctx, [fun.body]
+
+    def context_post_execute(self, ctx: Ctx, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> \
+    Tuple[Ctx, TPostRes]:
+        fun, args = execute_ret
+        assert isinstance(fun, Fun), fun
+
+        for var in fun.args:
+            ctx = ctx.pop(var.name)
+        return ctx, post_result[0]
 
 
 @dataclass(unsafe_hash=True, init=False, repr=False)

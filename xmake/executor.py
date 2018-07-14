@@ -1,13 +1,12 @@
 import logging
-from enum import Enum
-from pprint import pprint
-from typing import Optional, Any, Tuple, Dict, List
-from uuid import UUID
+from typing import Any, Dict, List
 
-from dataclasses import dataclass, field, asdict, replace
+from dataclasses import dataclass, field
 
 from xmake.dep import KeyedDeps
 from xmake.dsl import Op, Ctx
+from xmake.error import ExecError
+from xmake.runtime import Step, JOB_STATE_SUCCESSOR, JOB_STATE_PREDECESSOR, JobRecID, JobRec
 
 
 class LazyLog:
@@ -26,52 +25,6 @@ class Counter:
         r = self.x
         self.x += 1
         return r
-
-
-class Step(Enum):
-    Deps = 'Deps'
-    Exec = 'Exec'
-    PostDeps = 'PostDeps'
-    PostExec = 'PostExec'
-    Result = 'Result'
-
-    def __repr__(self):
-        return self.value
-
-
-JOB_STATE_SUCCESSOR = {
-    Step.Deps: Step.Exec,
-    Step.Exec: Step.PostDeps,
-    Step.PostDeps: Step.PostExec,
-    Step.PostExec: Step.Result,
-    Step.Result: None,
-}
-
-JOB_STATE_PREDECESSOR = {v: k for k, v in JOB_STATE_SUCCESSOR.items()}
-
-OpResult = Tuple[Step, Op]
-
-JobID = UUID
-
-JobRecID = Tuple[int, Step]
-
-
-@dataclass()
-class JobRec:
-    ident: int
-    step: Step
-    job: Optional[Op]
-    ctx: Ctx
-
-    @property
-    def id(self) -> JobRecID:
-        return self.ident, self.step
-
-    def with_step(self, step: Step) -> 'JobRec':
-        return replace(self, step=step)
-
-    def with_ctx(self, ctx: Ctx) -> 'JobRec':
-        return replace(self, ctx=ctx)
 
 
 @dataclass()
@@ -102,7 +55,10 @@ class Executor:
 
             callable_fun = getattr(self, 'execute_' + job_rec.step.value.lower())
 
-            new_ctx, deps, ret = callable_fun(job_rec, job_deps)
+            try:
+                new_ctx, deps, ret = callable_fun(job_rec, job_deps)
+            except Exception as e:
+                raise ExecError(job_rec, job_deps, e)
 
             deps_objs = []
 
@@ -158,12 +114,13 @@ class Executor:
         return [self.rets[j] for j in self.reqs[job_rec.with_step(step).id]]
 
     def execute_postdeps(self, job_rec: JobRec, job_deps: List[JobRec]):
-        deps = job_rec.job.post_dependencies(
+        ctx, deps = job_rec.job.context_post_dependencies(
+            job_rec.ctx,
             self.rets[job_rec.with_step(Step.Exec).id],
             *self._deps_res(job_rec)
         )
 
-        return job_rec.ctx, deps, deps
+        return ctx, deps, deps
 
     def execute_postexec(self, job_rec: JobRec, job_deps: List[JobRec]):
         ctx, ret = job_rec.job.context_post_execute(
