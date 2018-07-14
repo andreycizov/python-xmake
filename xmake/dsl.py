@@ -195,21 +195,21 @@ class Eval(Op):
 
 @dataclass(frozen=True)
 class Iter(Op):
-    aggregator: Any
+    aggregator: Op
     map: Var
     next_op: Op
     map_op: Op
 
     def dependencies(self) -> List['Op']:
         # how do we pass an aggregator to the dependency ?
-        return [With(self.map, Con(self.aggregator), self.next_op)]
+        return [With(self.map, self.aggregator, self.next_op)]
 
     def execute(self, rtn: Any) -> TRes:
         return rtn
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         if result:
-            return [Iter(result, self.map, self.next_op, With(self.map, Con(self.aggregator), self.map_op))]
+            return [Iter(Con(result), self.map, self.next_op, With(self.map, self.aggregator, self.map_op))]
         else:
             return []
 

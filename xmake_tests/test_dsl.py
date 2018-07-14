@@ -14,7 +14,7 @@ class TestDSL(unittest.TestCase):
         # c)
 
         prog = Iter(
-            0,
+            Con(0),
             Var('id'),
             Eval('a + 1 if a < 10 else None', Var('id')),
             With(
@@ -23,7 +23,7 @@ class TestDSL(unittest.TestCase):
                 Eval('0', Var('a')),
             )
         )
-        self.assertEqual(None, Executor().execute(prog))
+        self.assertEqual(None, Executor(should_trace=True).execute(prog))
 
     def test_with(self):
         ex = Executor()

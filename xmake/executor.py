@@ -49,6 +49,9 @@ class Executor:
         while len(self.deps):
             job_rec, job_deps = self.deps.pop()
 
+            if self.should_trace:
+                logging.getLogger(__name__).warning('[1] FINISHED %s %s', job_rec, job_deps)
+
             if job_rec.job is None:
                 exit_job_dep, = job_deps
                 return self.rets[exit_job_dep.id]
@@ -79,8 +82,8 @@ class Executor:
             succ = JOB_STATE_SUCCESSOR.get(job_rec.step)
 
             if self.should_trace:
-                logging.getLogger(__name__).warning('TRACE %s %s %s %s %s', job_rec, deps, ret, succ, deps_objs)
-                logging.getLogger(__name__).warning('CTX %s', new_ctx)
+                logging.getLogger(__name__).warning('FINISHED %s %s %s %s %s', job_rec, deps, ret, succ, deps_objs)
+                logging.getLogger(__name__).warning('FINISHED CTX %s', new_ctx)
 
             if succ:
                 self.deps.put(job_rec.with_step(succ).with_ctx(new_ctx), *deps_objs)

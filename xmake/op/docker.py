@@ -14,7 +14,7 @@ from docker import DockerClient
 from docker.constants import DEFAULT_DOCKER_API_VERSION
 from docker.types import ContainerConfig as _CC, HostConfig as _HC
 
-from xmake.dsl import Op
+from xmake.dsl import Op, Var, TRes
 
 
 class Obj(dict):
@@ -67,7 +67,7 @@ class Container(Obj):
 
 @classmethod
 class Docker(Op):
-    conf: Op
+    conf: Op = Var('docker')
 
     def dependencies(self) -> List['Op']:
         return [self.conf]
@@ -243,6 +243,17 @@ class ImagePull(Op, DockerOp):
 
 
 @dataclass()
+class ImageTag(Op, DockerOp):
+    i: Image
+    tag: str
+
+    def execute(self, c: DockerClient) -> TRes:
+        repo, tag = Image.tag(self.tag)
+        r = c.api.tag(self.i.id, repo, tag, )
+        return r
+
+
+@dataclass()
 class ExecCreate(Op, DockerOp):
     c: Container
     command: List[str]
@@ -273,7 +284,7 @@ class ExecStart(Op, DockerOp):
 class ContainerList(Op, DockerOp):
     quiet: bool = False
     all: bool = True
-    filters: Optional[Dict[str, str]] = None
+    filters: Optional[Dict[str, Union[List[str], str]]] = None
 
     def execute(self, c: DockerClient):
         return [Container(x) for x in c.api.containers(quiet=self.quiet, all=self.all, filters=self.filters)]
@@ -346,7 +357,7 @@ class ContainerCommit(Op, DockerOp):
         if self.tag:
             repo, tag = Image.tag(self.tag).split(':')
 
-        return c.api.commit(self.c.id, repo, tag, self.message, self.author, self.changes, self.conf)
+        return Image(c.api.commit(self.c.id, repo, tag, self.message, self.author, self.changes, self.conf))
 
 
 @dataclass()
