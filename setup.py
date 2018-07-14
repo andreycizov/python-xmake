@@ -11,18 +11,18 @@ if sys.version_info >= (3, 7):
     reqs = [x for x in reqs if not x.rstrip().startswith('dataclasses')]
 
 setup(
-    name='xrpc',
+    name='xmake',
     version='0.0.1a8',
     author='Andrey Cizov',
     author_email='acizov@gmail.com',
-    packages=find_packages(include=('xrpc', 'xrpc.*',)),
-    description='Python 3 RPC framework',
+    packages=find_packages(include=('xmake', 'xmake.*',)),
+    description='Python 3 make-like DSL',
     keywords='',
-    url='https://github.com/andreycizov/python-xrpc',
+    url='https://github.com/andreycizov/python-xmake',
     include_package_data=True,
     long_description=readme,
     install_requires=reqs,
-    test_suite='xrpc_tests',
+    test_suite='xmake_tests',
     tests_require=test_reqs,
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
