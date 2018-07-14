@@ -245,7 +245,6 @@ class ImagePull(DockerOp):
 
         if stream:
             for x in r:
-                print(x)
                 logging.getLogger(__name__ + f'.{self.__class__.__name__}').debug('%s', x)
         else:
             return r

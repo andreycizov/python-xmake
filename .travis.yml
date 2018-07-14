@@ -1,6 +1,9 @@
 language: python
 python:
 - 3.6
+sudo: required
+services:
+- docker
 install:
 - pip install -U tox tox-travis codecov
 script: tox
