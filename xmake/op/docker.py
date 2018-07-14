@@ -274,22 +274,30 @@ class ExecCreate(DockerOp):
         return Exec(c.api.exec_create(self.c['Id'], self.command))
 
 
+def log_packets(self, iter_obj):
+    for pkt in iter_obj:
+        try:
+            pkt = pkt.decode()
+        except:
+            logging.exception('')
+            pkt = str(pkt)
+
+        pkts = pkt.split('\n')
+        pkts = (y for y in pkts if len(y))
+
+        for pkt in pkts:
+            logging.getLogger(__name__ + f'.{self.__class__.__name__}').warning('%s', pkt)
+            yield pkt
+
+
 @dataclass()
 class ExecStart(DockerOp):
     e: Exec
 
     def execute(self, c: DockerClient):
-        for pkt in c.api.exec_start(self.e.id, stream=True):
-            try:
-                pkt = pkt.decode()
-            except:
-                logging.exception('')
-                pkt = str(pkt)
-
-            pkts = pkt.split('\n')
-            pkts = (y for y in pkts if len(y))
-            for pkt in pkts:
-                logging.getLogger(__name__ + f'.{self.__class__.__name__}').warning('%s', pkt)
+        r = c.api.exec_start(self.e.id, stream=True)
+        for pkt in log_packets(self, r):
+            continue
 
 
 @dataclass()
@@ -352,6 +360,22 @@ class ContainerStart(DockerOp):
         assert x2, 'Must be hydrated'
 
         return c.api.start(self.c['Id'])
+
+
+@dataclass()
+class ContainerAttach(DockerOp):
+    c: Container
+
+    def execute(self, c: DockerClient):
+        x1 = self.c.get('State')
+        x2 = self.c.get('Id')
+        assert x1 not in ['running'], f'Status is {x1}'
+        assert x2, 'Must be hydrated'
+
+        r = c.api.attach(self.c['Id'], stream=True, logs=True)
+
+        for pkt in log_packets(self, r):
+            continue
 
 
 @dataclass()
