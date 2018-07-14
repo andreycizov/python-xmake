@@ -1,6 +1,6 @@
 import logging
 import string
-from typing import TypeVar, List, Any, Tuple
+from typing import TypeVar, List, Any, Tuple, Callable, Union
 
 from dataclasses import dataclass, field
 
@@ -159,9 +159,9 @@ def _eval_map_args(iter_obj):
     return {**r1, **r2}
 
 
-@dataclass(unsafe_hash=True, init=False)
+@dataclass
 class Eval(Op):
-    body: str
+    body: Union[str, Callable]
 
     args: List[Op]
 
@@ -175,8 +175,13 @@ class Eval(Op):
     # eval needs arguments
 
     def execute(self, *args: Any) -> TRes:
-        r = _eval_map_args(args)
-        return eval(self.body, {}, r)
+        if isinstance(self.body, str):
+            r = _eval_map_args(args)
+            return eval(self.body, {}, r)
+        elif callable(self.body):
+            return self.body(*args)
+        else:
+            raise NotImplementedError('')
 
 
 @dataclass(frozen=True)
@@ -223,6 +228,44 @@ class With(Op):
     def context_post_execute(self, ctx: Ctx, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> \
             Tuple[Ctx, TPostRes]:
         return ctx.pop(self.var.name), post_result[0]
+
+
+@dataclass
+class Case:
+    match_op: Op
+    map_op: Op
+
+
+@dataclass(init=False)
+class Match(Op):
+    map: Var
+    value_op: Op
+    cases: List[Case]
+
+    def __init__(self, map: Var, value_up: Op, case: Case, *args: Case):
+        self.map = map
+        self.value_op = value_up
+        self.cases = [case] + list(args)
+
+    def dependencies(self) -> List['Op']:
+        return [With(self.map, self.value_op, self.cases[0].match_op)]
+
+    def execute(self, val) -> TRes:
+        return val
+
+    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
+        if result:
+            return [With(self.map, self.value_op, self.cases[0].map_op)]
+        elif len(self.cases):
+            return [Match(self.map, self.value_op, *self.cases[1:])]
+        else:
+            return []
+
+    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
+        if len(post_result) == 0:
+            return None
+        else:
+            return post_result[0]
 
 
 @dataclass(unsafe_hash=True, init=False, repr=False)
