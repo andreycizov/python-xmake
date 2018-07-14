@@ -14,7 +14,8 @@ from docker import DockerClient
 from docker.constants import DEFAULT_DOCKER_API_VERSION
 from docker.types import ContainerConfig as _CC, HostConfig as _HC
 
-from xmake.dsl import Op, Var, TRes
+from xmake.dsl import Var
+from xmake.abstract import TRes, Op
 
 
 class Obj(dict):
@@ -72,8 +73,11 @@ class Docker(Op):
     def dependencies(self) -> List['Op']:
         return [self.conf]
 
-    def execute(self, arg: DockerClient):
-        return DockerClient(arg)
+    def execute(self, arg: Union[DockerClient, str]):
+        if isinstance(arg, str):
+            return DockerClient(arg)
+        else:
+            return arg
 
 
 class DockerOp(Op):
@@ -285,7 +289,7 @@ class ExecStart(DockerOp):
             pkts = pkt.split('\n')
             pkts = (y for y in pkts if len(y))
             for pkt in pkts:
-                logging.getLogger(__name__ + f'.{self.__class__.__name__}').debug('%s', pkt)
+                logging.getLogger(__name__ + f'.{self.__class__.__name__}').warning('%s', pkt)
 
 
 @dataclass()
@@ -357,7 +361,7 @@ class ContainerCommit(DockerOp):
     message: Optional[str] = None
     author: Optional[str] = None
     changes: Optional[Union[str, List[str]]] = None
-    conf: Optional[str] = None
+    conf: Optional[Dict[str, Any]] = None
 
     def execute(self, c: DockerClient):
         repo, tag = None, None

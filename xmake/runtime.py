@@ -1,10 +1,9 @@
 from enum import Enum
 from typing import Tuple, Optional
-from uuid import UUID
 
 from dataclasses import dataclass, replace
 
-from xmake.dsl import Op, Ctx
+from xmake.abstract import Ctx, Op
 
 
 class Step(Enum):

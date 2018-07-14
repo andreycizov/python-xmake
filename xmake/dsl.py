@@ -1,109 +1,13 @@
+import inspect
 import logging
 import string
-from typing import TypeVar, List, Any, Tuple, Callable, Union
+from collections import deque
+from typing import List, Any, Tuple, Callable, Union, Optional
 
 from dataclasses import dataclass, field
 
-TRes = TypeVar('TRes')
-TPostRes = TypeVar('TPostRes')
-
-
-@dataclass()
-class Ctx:
-    mappings: List[Tuple[str, Any]] = field(default_factory=list)
-
-    def get(self, n: str):
-        for cn, cv in self.mappings[::-1]:
-            if cn == n:
-                return cv
-        else:
-            raise KeyError(n)
-
-    def push(self, n: str, val: Any) -> 'Ctx':
-        return Ctx(self.mappings + [(n, val)])
-
-    def pop(self, n: str) -> Any:
-        idxs = range(len(self.mappings) - 1, -1, -1)
-        for idx, (cn, cv) in ((idx, self.mappings[idx]) for idx in idxs):
-            if cn == n:
-                return Ctx(self.mappings[:idx] + self.mappings[idx + 1:])
-        else:
-            raise KeyError(n)
-
-
-class Op:
-    # how is an operation allowed to manipulate contexts ?
-
-    @property
-    def logger(self):
-        return logging.getLogger(self.__module__ + '.' + self.__class__.__name__)
-
-    def context_dependencies(self, ctx: Ctx) -> Tuple[Ctx, List['Op']]:
-        """
-        :return: list of dependencies to execute before ``execute``
-        """
-        return ctx, self.dependencies()
-
-    def dependencies(self) -> List['Op']:
-        """
-        :return: list of dependencies to execute before ``execute``
-        """
-        return []
-
-    def context_execute(self, ctx: Ctx, *args: Any) -> Tuple[Ctx, TRes]:
-        res = self.execute(*args)
-        return self.context_enter(ctx, res, *args), res
-
-    def execute(self, *args: Any) -> TRes:
-        """
-        :param args: what is returned by every dependency returned by ``dependencies``
-        :return:
-        """
-        self.logger.debug('%s', args)
-        return None
-
-    def context_enter(self, ctx: Ctx, res: TRes, *args: Any) -> Ctx:
-        return ctx
-
-    def context_post_dependencies(self, ctx: Ctx, result: TRes, *pre_result: List[TRes]) -> Tuple[Ctx, List['Op']]:
-        """
-        :param result: what is returned by ``execute``
-        :param pre_result: what is returned by ``execute`` for every dependency returned by ``dependencies``
-        :return: list of dependencies to execute before ``post_execute``
-        """
-        return ctx, self.post_dependencies(result, pre_result)
-
-    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
-        """
-        :param result: what is returned by ``execute``
-        :param pre_result: what is returned by ``execute`` for every dependency returned by ``dependencies``
-        :return: list of dependencies to execute before ``post_execute``
-        """
-        return []
-
-    def context_post_execute(
-            self,
-            ctx: Ctx,
-            execute_ret: TRes,
-            pre_result: List[TRes],
-            post_result: List[TPostRes]
-    ) -> Tuple[Ctx, TPostRes]:
-        ret = self.post_execute(execute_ret, pre_result, post_result)
-
-        return self.context_exit(ctx, ret, pre_result, post_result), ret
-
-    def context_exit(self, ctx: Ctx, ret: TPostRes, pre_result: List[TRes], post_result: List[TPostRes]) -> Ctx:
-        return ctx
-
-    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
-        """
-        :param execute_ret: what is returned by ``execute``
-        :param pre_result: what is returned by every dependency returned by ``dependencies``
-        :param post_result: what is returned by every dependency returned by ``post_dependencies``
-        :return:
-        """
-        self.logger.getChild('post_execute').debug('%s %s', pre_result, post_result)
-        return execute_ret
+from xmake.abstract import TRes, TPostRes, Ctx, Op, _get_caller
+from xmake.error import OpError
 
 
 @dataclass()
@@ -112,7 +16,7 @@ class LeftRightRes:
     right: Any
 
 
-@dataclass(frozen=True)
+@dataclass
 class Con(Op):
     value: Any
 
@@ -138,7 +42,7 @@ class DependsOn(Op):
 VarName = str
 
 
-@dataclass(frozen=True)
+@dataclass
 class Var(Op):
     name: VarName
 
@@ -169,31 +73,126 @@ def _eval_map_args(iter_obj):
 
 
 @dataclass
-class Eval(Op):
-    body: Union[str, Callable]
+class Log(Op):
+    node: Op
+    name: str = field(default_factory=lambda: __name__)
+    msg: Optional[str] = None
 
-    args: List[Op]
+    def __init__(self, *args: Union[str, Op]):
+        guessed_name = inspect.getmodule(_get_caller(2)[0]).__name__
 
-    def __init__(self, body, *args: Var):
-        self.body = body
-        self.args = args
+        *args, node = args
+
+        assert isinstance(node, Op), node
+
+        new_name = None
+        name = guessed_name
+        msg = None
+
+        if len(args) == 2:
+            new_name, msg = args
+        elif len(args) == 1:
+            msg, = args
+        elif len(args) == 0:
+            pass
+        else:
+            raise NotImplementedError('')
+
+        if new_name is not None:
+            name = new_name
+
+        self.node = node
+        self.name = name
+        self.msg = msg
+
+        self.__post_init__()
 
     def dependencies(self) -> List['Op']:
+        return [self.node]
+
+    def execute(self, arg: Any) -> TRes:
+        logging.getLogger(self.name).warning('[%s] %s', self.msg if self.msg else '_', arg)
+        return arg
+
+
+@dataclass
+class Err(Op):
+    msg: Optional[str]
+    args: List[Op]
+
+    def __init__(self, msg: Optional[str] = None, *args: Op):
+        self.msg = msg
+        self.args = args
+
+        self.__post_init__()
+
+    def dependencies(self):
         return self.args
+
+    def execute(self, *args: Any) -> TRes:
+        msg = self.msg
+
+        if msg is None:
+            msg = 'Error'
+
+        msg = msg % args
+
+        raise OpError(self, reason=msg)
+
+
+@dataclass
+class Eval(Op):
+    args: List[Op]
+    body: Union[str, Callable, Op]
+
+    def __init__(self, *args: Union[str, Callable, Op]):
+        for arg in args[:-1]:
+            assert isinstance(arg, Op), arg
+
+        body = args[-1]
+        assert isinstance(body, (str, Callable, Op))
+
+        self.body = body
+        self.args = args[:-1]
+
+        self.__post_init__()
+
+    def dependencies(self) -> List['Op']:
+        if isinstance(self.body, Op):
+            assert not self.args, self.args
+            return [self.body]
+        else:
+            return self.args
 
     # eval needs arguments
 
     def execute(self, *args: Any) -> TRes:
-        if isinstance(self.body, str):
+        if isinstance(self.body, Op):
+            return args[0]
+        elif isinstance(self.body, str):
             r = _eval_map_args(args)
             return eval(self.body, {}, r)
         elif callable(self.body):
             return self.body(*args)
         else:
-            raise NotImplementedError('')
+            raise NotImplementedError(self.body)
+
+    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
+        if isinstance(self.body, Op):
+            return [result]
+        else:
+            return []
+
+    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
+        if isinstance(self.body, Op):
+            return post_result[0]
+        else:
+            return execute_ret
 
 
-@dataclass(frozen=True)
+# fun agg(agg) -> (agg, agg + 1) if
+
+@dataclass
 class Iter(Op):
     aggregator: Op
     map: Var
@@ -208,27 +207,65 @@ class Iter(Op):
         return rtn
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
-        if result:
-            return [Iter(Con(result), self.map, self.next_op, With(self.map, self.aggregator, self.map_op))]
+        item, new_agg = result
+
+        # we need to somehow remember the last item returned.
+
+        if new_agg is not None:
+            return [
+                Iter(Con(new_agg), self.map, self.next_op, self.map_op),
+                With(self.map, Con(item), self.map_op)
+            ]
         else:
             return []
 
     def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
-        return None
+        if len(post_result):
+            prev_iter, curr_map = post_result
+            if prev_iter is not None:
+                return prev_iter
+            else:
+                return curr_map
+        else:
+            return None
 
 
-@dataclass(frozen=True)
+@dataclass
 class With(Op):
-    var: Var
-    value_op: Op
+    vars: List[Var]
+    vals: List[Op]
     map_op: Op
 
+    def __init__(self, *args: Union[Var, Op]):
+        args = deque(args)
+        vars = []
+        vals = []
+        while len(args) > 1:
+            var = args.popleft()
+            assert isinstance(var, Var), var
+            vars.append(var)
+            val = args.popleft()
+            assert isinstance(val, Op), val
+            vals.append(val)
+
+        map_op = args.popleft()
+
+        assert isinstance(map_op, Op), map_op
+
+        self.vars = vars
+        self.vals = vals
+        self.map_op = map_op
+
+        self.__post_init__()
+
     def dependencies(self) -> List['Op']:
-        return [self.value_op]
+        return self.vals
 
     def context_execute(self, ctx: Ctx, *args: Any) -> Tuple[Ctx, TRes]:
-        arg, = args
-        return ctx.push(self.var.name, arg), None
+        for var, val in zip(self.vars, args):
+            ctx = ctx.push(var.name, val)
+
+        return ctx, None
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         # are dependencies called with the return value of me ?
@@ -236,7 +273,10 @@ class With(Op):
 
     def context_post_execute(self, ctx: Ctx, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> \
             Tuple[Ctx, TPostRes]:
-        return ctx.pop(self.var.name), post_result[0]
+        for var in self.vars:
+            ctx = ctx.pop(var.name)
+
+        return ctx, post_result[0]
 
 
 @dataclass
@@ -256,6 +296,8 @@ class Match(Op):
         self.value_op = value_up
         self.cases = [case] + list(args)
 
+        self.__post_init__()
+
     def dependencies(self) -> List['Op']:
         return [With(self.map, self.value_op, self.cases[0].match_op)]
 
@@ -265,7 +307,7 @@ class Match(Op):
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         if result:
             return [With(self.map, self.value_op, self.cases[0].map_op)]
-        elif len(self.cases):
+        elif len(self.cases) > 1:
             return [Match(self.map, self.value_op, *self.cases[1:])]
         else:
             return []
@@ -276,6 +318,8 @@ class Match(Op):
         else:
             return post_result[0]
 
+
+# cps is when one function calls the other function
 
 @dataclass(init=False)
 class Fun(Op):
@@ -293,6 +337,8 @@ class Fun(Op):
         self.args = args
         self.body = body
 
+        self.__post_init__()
+
     def execute(self, *args: Any):
         return self
 
@@ -305,6 +351,8 @@ class Call(Op):
     def __init__(self, fun: Op, *args: Op):
         self.fun = fun
         self.args = list(args)
+
+        self.__post_init__()
 
     def dependencies(self) -> List['Op']:
         return [self.fun] + self.args
@@ -338,15 +386,23 @@ class Seq(Op):
     def __init__(self, *ops: Op):
         self.ops = tuple(ops)
 
+        self.__post_init__()
+
     def __repr__(self) -> str:
         r = ', '.join(str(x) for x in self.ops)
         return f'{self.__class__.__name__}({r})'
 
     def dependencies(self) -> List['Op']:
-        return [self.ops[0]]
+        if len(self.ops):
+            return [self.ops[0]]
+        else:
+            return []
 
-    def execute(self, ret: Any) -> TRes:
-        return ret
+    def execute(self, *ret: Any) -> TRes:
+        if len(self.ops):
+            return ret[0]
+        else:
+            return None
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         if len(self.ops) > 1:
@@ -355,7 +411,10 @@ class Seq(Op):
             return []
 
     def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
-        return [execute_ret] + (post_result[0] if len(self.ops) > 1 else [])
+        if len(self.ops) > 1 and post_result[0] is not None:
+            return post_result[0]
+        else:
+            return execute_ret
 
 
 @dataclass()
@@ -364,6 +423,8 @@ class Par(Op):
 
     def __init__(self, *ops: Op):
         self.ops = list(ops)
+
+        self.__post_init__()
 
     def __repr__(self) -> str:
         r = ', '.join(str(x) for x in self.ops)
@@ -374,3 +435,25 @@ class Par(Op):
 
     def execute(self, *args: Any) -> TRes:
         return list(args)
+
+
+@dataclass()
+class CPS(Op):
+    arg: Var
+    ret: Var
+    ops: List[Op]
+
+    def __init__(self, arg: Var, ret: Var, *ops: Op):
+        self.arg = arg
+        self.ret = ret
+        self.ops = ops
+
+        self.__post_init__()
+
+    def context_dependencies(self, ctx: Ctx):
+        Call(Fun(self.arg, self.ret, self.ops[0]), )
+
+        ctx = ctx.push(self.ret.name, Fun(
+            self.arg,
+            self.ops[0]
+        ))
