@@ -16,8 +16,8 @@ class TestDSL(unittest.TestCase):
         # c)
 
         prog = Iter(
-            Con(0),
             Var('id'),
+            Con(0),
             Eval(Var('id'), '(a, a + 1) if a < 10 else (a, None)'),
             With(
                 Var('a'),
@@ -115,8 +115,8 @@ class TestDSL(unittest.TestCase):
 
         r = ex.execute(
             Iter(
-                Con(0),
                 Var('x'),
+                Con(0),
                 Eval(Var('x'), lambda x: ((x, x + 1) if x < 5 else (x, None))),
                 Eval(Var('x'), last_item_updater),
             )

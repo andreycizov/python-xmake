@@ -31,6 +31,15 @@ class Ctx:
             raise KeyError(n)
 
 
+def _get_caller(depth=2):
+    # print('====')
+    # for x in inspect.stack():
+    #     print(x)
+    # print('====')
+    caller = inspect.stack()[depth]
+    return caller
+
+
 @dataclass()
 class Op:
     # todo instead of execute vs post_execute, allow to execute indefinitely until it returns 0 dependencies.
@@ -119,8 +128,3 @@ class Op:
         """
         self.logger.getChild('post_execute').debug('%s %s', pre_result, post_result)
         return execute_ret
-
-
-def _get_caller(depth=2):
-    caller = inspect.stack()[depth]
-    return caller

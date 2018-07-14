@@ -68,7 +68,7 @@ class Container(Obj):
 
 @dataclass()
 class Docker(Op):
-    conf: Op = Var('docker')
+    conf: Op = field(default_factory=lambda: Var('docker'))
 
     def dependencies(self) -> List['Op']:
         return [self.conf]
@@ -260,8 +260,8 @@ class ImageTag(DockerOp):
     tag: str
 
     def execute(self, c: DockerClient) -> TRes:
-        repo, tag = Image.tag(self.tag)
-        r = c.api.tag(self.i.id, repo, tag, )
+        repo, tag = Image.tag(self.tag).split(':')
+        r = c.api.tag(self.i.id, repo, tag)
         return r
 
 

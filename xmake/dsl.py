@@ -47,7 +47,10 @@ class Var(Op):
     name: VarName
 
     def context_execute(self, ctx: Ctx, *args: Any) -> Tuple[Ctx, TRes]:
-        return ctx, ctx.get(self.name)
+        try:
+            return ctx, ctx.get(self.name)
+        except KeyError:
+            raise OpError(self, f'No variable mapping found `{self.name}`')
 
 
 EVAL_DICT = string.ascii_lowercase
@@ -194,8 +197,8 @@ class Eval(Op):
 
 @dataclass
 class Iter(Op):
-    aggregator: Op
     map: Var
+    aggregator: Op
     next_op: Op
     map_op: Op
 
@@ -213,7 +216,7 @@ class Iter(Op):
 
         if new_agg is not None:
             return [
-                Iter(Con(new_agg), self.map, self.next_op, self.map_op),
+                Iter(self.map, Con(new_agg), self.next_op, self.map_op),
                 With(self.map, Con(item), self.map_op)
             ]
         else:
@@ -248,7 +251,10 @@ class With(Op):
             assert isinstance(val, Op), val
             vals.append(val)
 
-        map_op = args.popleft()
+        try:
+            map_op = args.popleft()
+        except IndexError:
+            raise OpError(self, 'With needs a body')
 
         assert isinstance(map_op, Op), map_op
 
@@ -314,7 +320,7 @@ class Match(Op):
 
     def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
         if len(post_result) == 0:
-            return None
+            raise OpError(self, 'unmatched')
         else:
             return post_result[0]
 
@@ -329,8 +335,19 @@ class Fun(Op):
     def __init__(self, *params: Union[Var, Op]):
         *args, body = params
 
+        found = set()
+        duplicates = set()
+
         for arg in args:
             assert isinstance(arg, Var)
+            if arg.name not in found:
+                if arg.name in found:
+                    duplicates.add(arg.name)
+                found.add(arg.name)
+
+        if duplicates:
+            first = [arg for arg in args if arg.name in duplicates][0]
+            raise OpError(first, f'duplicate fun args {duplicates} (marking position for the first one)')
 
         assert isinstance(body, Op)
 
@@ -364,8 +381,19 @@ class Call(Op):
         fun, args = result
         assert isinstance(fun, Fun), fun
 
+        not_found = {x.name for x in fun.args}
+
         for var, val in zip(fun.args, args):
             ctx = ctx.push(var.name, val)
+            not_found.remove(var.name)
+
+        if len(not_found):
+            not_found = list(not_found)
+            raise OpError(self, f'NOT_ENOUGH could not find mappings for variables named {not_found}')
+
+        if len(fun.args) < len(args):
+            others = list(zip(self.args, args))[len(fun.args):]
+            raise OpError(self, f'TOO_MANY could not find mappings for variables valued {others}')
 
         return ctx, [fun.body]
 
