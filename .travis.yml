@@ -1,0 +1,17 @@
+language: python
+python:
+- 3.6
+install:
+- pip install -U tox tox-travis codecov
+script: tox
+after_success:
+- codecov
+deploy:
+  provider: pypi
+  user: andreycizov
+  password:
+    secure: tJoWH68Jdk6FDRtSQSclsrxFKPFc6aDRFREnx2fXZQwKxNbckgpLOKzOm54nZm7M7SPj2bOtqBWzQu1132J7A/qcgVv23lHR0X0AuMbvP085WLzBSl6dxJplknPkzENf7vf4fCXrFR5bOXABG78I5xeO0xFzCB3i+/eJ6PcXXk0ZjkNtj0lQeslt45BoPCIZiNfQRGq2LqUrwvAaiRU7y+lYY6KqbZ0Ed50/pQX/wV+Ti7ZzJZpFMO9KgkVRR0dQYGbY2yD977GqjObydp/4jWNqeUEpkTuFdcdbBod+YS0PSjD2NYeNGc0In1pUZVy/e9wVJK50GyQcsa5L+RxTgBkAfVWWrkUC+nts32Rs7pV0WLlAfxE2SCV8F9/rvZf46r9mdg/YLq2qAvfZtVebEg5Jz0H73zE9Q4MPp+4Z8KGA7RBf7RRz6Bcjqdrq7RyzYPIlOxp3fciVDG0vN2+gLXiYiXG3lHD8/MkG+y+4Z6iKZBs2ORR7qX55l10UePZ47KauwashuHkl9oJLDREQTI8j76/5HZ0E+3BPzotfBAi7N1stIwc8sCAGCfl5f6VD7UajehPgznpF9bcTENxZlwEoT5kf3+wd4BgSUbZnLAz/khm6zeJDL3lhWnrm1EsOzlgbduf4k+i5ZVrsxKtlqug220X5TLGOJAnWOijbWlQ=
+  on:
+    tags: true
+    distributions: sdist bdist_wheel
+    repo: andreycizov/python-xmake

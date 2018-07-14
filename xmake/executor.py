@@ -1,11 +1,13 @@
 import logging
-from pprint import pformat
-from typing import Optional
+from enum import Enum
+from pprint import pprint
+from typing import Optional, Any, Tuple, Dict, List
+from uuid import UUID
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict, replace
 
-from xmake.dsl import Op
-from xmake.struct import DependencyIndex, JobState
+from xmake.dep import KeyedDeps
+from xmake.dsl import Op, Ctx
 
 
 class LazyLog:
@@ -16,146 +18,163 @@ class LazyLog:
         return self.callable()
 
 
+@dataclass
+class Counter:
+    x: int = 0
+
+    def __call__(self):
+        r = self.x
+        self.x += 1
+        return r
+
+
+class Step(Enum):
+    Deps = 'Deps'
+    Exec = 'Exec'
+    PostDeps = 'PostDeps'
+    PostExec = 'PostExec'
+    Result = 'Result'
+
+    def __repr__(self):
+        return self.value
+
+
+JOB_STATE_SUCCESSOR = {
+    Step.Deps: Step.Exec,
+    Step.Exec: Step.PostDeps,
+    Step.PostDeps: Step.PostExec,
+    Step.PostExec: Step.Result,
+    Step.Result: None,
+}
+
+JOB_STATE_PREDECESSOR = {v: k for k, v in JOB_STATE_SUCCESSOR.items()}
+
+OpResult = Tuple[Step, Op]
+
+JobID = UUID
+
+JobRecID = Tuple[int, Step]
+
+
+@dataclass()
+class JobRec:
+    ident: int
+    step: Step
+    job: Optional[Op]
+    ctx: Ctx
+
+    @property
+    def id(self) -> JobRecID:
+        return self.ident, self.step
+
+    def with_step(self, step: Step) -> 'JobRec':
+        return replace(self, step=step)
+
+    def with_ctx(self, ctx: Ctx) -> 'JobRec':
+        return replace(self, ctx=ctx)
+
+
 @dataclass()
 class Executor:
-    deps: Optional[DependencyIndex] = None
-    debug_logging: bool = False
-
-    def push_dep(self, state, item, x):
-        self.deps.add_depends((state, item), (JobState.Result, x))
-        self.deps.add_depends((JobState.Result, x), (JobState.PostExec, x))
-        self.deps.add_depends((JobState.PostExec, x), (JobState.PostDeps, x))
-        self.deps.add_depends((JobState.PostDeps, x), (JobState.Exec, x))
-        self.deps.add_depends((JobState.Exec, x), (JobState.Deps, x))
+    should_trace: bool = False
+    deps: KeyedDeps[JobRecID, JobRec] = field(default_factory=lambda: KeyedDeps(lambda x: x.id))
+    ctr: Counter = field(default_factory=Counter)
+    rets: Dict[JobRecID, Any] = field(default_factory=dict)
+    reqs: Dict[JobRecID, List[JobRecID]] = field(default_factory=dict)
 
     def execute(self, root: Op):
-        # how do we enable contexts ?
-        self.deps = DependencyIndex()
+        root_ctx = Ctx()
+        # we would like the queue to execute the jobs.
+        exit_rec = JobRec(self.ctr(), Step.Deps, None, root_ctx)
+        root_rec = JobRec(self.ctr(), Step.Deps, root, root_ctx)
 
-        self.push_dep(JobState.Result, None, root)
-        # todo this is a temp fix.
-        self.deps.queue.append((JobState.Result, None))
+        self.reqs[root_rec.id] = [root_rec.with_step(Step.Result).id]
 
-        # todo run while we've got items in the queue and there are items marked as running
-        # todo if there are no items in the queue, no items are running, then there are dependency cycles
+        self.deps.put(exit_rec, root_rec.with_step(Step.Result))
+        self.deps.put(root_rec)
 
-        while len(self.deps.queue):
-            state, item = self.deps.pop()
+        while len(self.deps):
+            job_rec, job_deps = self.deps.pop()
 
-            if self.debug_logging:
-                logging.getLogger(__name__ + '.ep').debug('%s %s', state, item)
-                logging.getLogger(__name__ + '.queue').debug(
-                    '%s',
-                    # state == JobState.Exec,
-                    LazyLog(lambda: pformat(list(self.deps.queue))),
-                    # list(deps.queue),
+            if job_rec.job is None:
+                exit_job_dep, = job_deps
+                return self.rets[exit_job_dep.id]
 
-                )
+            callable_fun = getattr(self, 'execute_' + job_rec.step.value.lower())
 
-                logging.getLogger(__name__ + '.results').debug(
-                    '%s',
-                    # state == JobState.Exec,
-                    LazyLog(lambda: pformat(sorted([(k, v) for k, v in self.deps.results.items()],
-                                                   key=lambda x: (x[0][0].value, x[0][1].__class__.__name__)))),
+            new_ctx, deps, ret = callable_fun(job_rec, job_deps)
 
-                )
+            deps_objs = []
 
-                logging.getLogger(__name__ + '.deps').debug(
-                    '%s',
-                    # state == JobState.Exec,
-                    LazyLog(lambda: '\n' + '\n'.join(repr(x) + ': ' + repr(y) for x, y in (
-                        sorted([(k, v) for k, v in self.deps.deps_cache.items()],
-                               key=lambda x: (x[0][0].value, x[0][1].__class__.__name__)))))
+            self.reqs[job_rec.id] = []
 
-                    # list(deps.queue),
+            for dep in deps:
+                dep_rec = JobRec(self.ctr(), Step.Deps, dep, new_ctx)
 
-                )
+                self.deps.put(dep_rec)
 
-            if item is None:
-                assert len(self.deps.queue) == 0, self.deps.queue
-                return self.deps.dependency_results((JobState.Result, None))[0]
+                dep_res_rec = dep_rec.with_step(Step.Result)
+                deps_objs.append(dep_res_rec)
 
-            ret = None
+                self.reqs[job_rec.id].append(dep_res_rec.id)
 
-            attr = getattr(self, 'execute_' + state.value.lower(), None)
+            self.rets[job_rec.id] = ret
 
-            if attr:
-                ret = attr(state, item)
+            succ = JOB_STATE_SUCCESSOR.get(job_rec.step)
+
+            if self.should_trace:
+                logging.getLogger(__name__).warning('TRACE %s %s %s %s %s', job_rec, deps, ret, succ, deps_objs)
+                logging.getLogger(__name__).warning('CTX %s', new_ctx)
+
+            if succ:
+                self.deps.put(job_rec.with_step(succ).with_ctx(new_ctx), *deps_objs)
             else:
-                raise NotImplementedError(f"Can't do anything here: {state} {item}")
+                assert len(deps_objs) == 0, deps_objs
 
-            logging.getLogger(__name__ + '.op').debug('%s %s %s', state, item, ret)
+            pred = JOB_STATE_PREDECESSOR.get(job_rec.step)
 
-            self.deps.resolve_depends((state, item), ret)
+            if pred:
+                pred_job_rec = job_rec.with_step(pred)
 
-    def _get_deps(self, item):
-        ret = self.deps.dependency_results((JobState.Exec, item))[1:]
+                # todo cleanup
+                continue
 
-        return ret
+                del self.rets[pred_job_rec]
 
-    def _get_postdeps(self, item):
-        _, *ret_prev = self.deps.dependency_results((JobState.PostExec, item))
-        # assert len(ret_prev) == 1, ret_prev
-        return ret_prev
+    def execute_deps(self, job_rec: JobRec, job_deps: List[JobRec]):
+        ctx, deps = job_rec.job.context_dependencies(job_rec.ctx)
 
-    def _get_exec(self, item):
-        ret_prev, = self.deps.dependency_results((JobState.PostDeps, item))
-        return ret_prev
+        return ctx, deps, deps
 
-    def _get_postexec(self, item):
-        dep_ret = self.deps.dependency_results((JobState.Result, item))
-        ret = dep_ret[-1]
-        return ret
+    def execute_exec(self, job_rec: JobRec, job_deps: List[JobRec]):
+        ctx, ret = job_rec.job.context_execute(
+            job_rec.ctx,
+            *self._deps_res(job_rec)
+        )
 
-    def execute_postdeps(self, state, item):
-        # ret_prev = deps.dependency_results((JobState.Deps, item))
+        return ctx, [], ret
 
-        post_deps = item.post_dependencies(self._get_exec(item), *self._get_deps(item))
+    def _deps_res(self, job_rec: JobRec, step=Step.Deps):
+        return [self.rets[j] for j in self.reqs[job_rec.with_step(step).id]]
 
-        for x in post_deps:
-            self.push_dep(JobState.PostExec, item, x)
+    def execute_postdeps(self, job_rec: JobRec, job_deps: List[JobRec]):
+        deps = job_rec.job.post_dependencies(
+            self.rets[job_rec.with_step(Step.Exec).id],
+            *self._deps_res(job_rec)
+        )
 
-        return post_deps
+        return job_rec.ctx, deps, deps
 
-    def execute_deps(self, state, item):
-        item_deps = item.dependencies()
+    def execute_postexec(self, job_rec: JobRec, job_deps: List[JobRec]):
+        ctx, ret = job_rec.job.context_post_execute(
+            job_rec.ctx,
+            self.rets[job_rec.with_step(Step.Exec).id],
+            self._deps_res(job_rec),
+            self._deps_res(job_rec, Step.PostDeps),
+        )
 
-        for x in item_deps:
-            self.push_dep(JobState.Exec, item, x)
+        return ctx, [], ret
 
-        return item_deps
-
-    def execute_exec(self, state, top):
-        # todo only exec and postexec are expected to be run in a separate process.
-        deps_on = self.deps.depends_on((JobState.Exec, top))
-        if len(deps_on):
-            raise NotImplementedError(f"Can't do anything here [1]: {state} {top} {deps_on}")
-        top_dep_rets = self._get_deps(top)
-        logging.getLogger(__name__ + '.dep_rets').debug('%s', top_dep_rets)
-        top_ret = top.execute(*top_dep_rets)
-        logging.getLogger(__name__ + '.ret').debug('%s', top_ret)
-
-        return top_ret
-
-    def execute_postexec(self, state, item):
-        # todo only exec and postexec are expected to be run in a separate process.
-
-        ret = self._get_exec(item)
-        deps = self._get_deps(item)
-        postdeps = self._get_postdeps(item)
-        # post_deps is a result returned by execute_postdeps (list of dependencies)
-        # what is ret ? there will be as many rets as there are post_deps
-
-        logging.getLogger(__name__).getChild('execute_postexec').debug('%s', ret)
-
-        ret = item.post_execute(ret, deps, postdeps)
-
-        return ret
-
-    def execute_result(self, state, item):
-        ret = self._get_postexec(item)
-        logging.getLogger(__name__).getChild('execute_result').debug('%s', ret)
-
-        resolved = self.deps.resolve_depends((JobState.Result, item), ret)
-
-        return ret
+    def execute_result(self, job_rec: JobRec, job_deps: List[JobRec]):
+        ctx, ret = job_rec.ctx, self.rets[job_rec.with_step(Step.PostExec).id]
+        return ctx, [], ret

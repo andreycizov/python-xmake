@@ -11,13 +11,10 @@ from urllib.parse import ParseResult, urlparse
 
 from dataclasses import field, dataclass
 from docker import DockerClient
-from docker.api.network import NetworkApiMixin
 from docker.constants import DEFAULT_DOCKER_API_VERSION
 from docker.types import ContainerConfig as _CC, HostConfig as _HC
 
 from xmake.dsl import Op
-
-BC = threading.local()
 
 
 class Obj(dict):
@@ -45,10 +42,6 @@ class Obj(dict):
 
 class Image(Obj):
     @classmethod
-    def get_tags(cls, x: Obj):
-        return map_none(x.get('RepoTags'), lambda: [])
-
-    @classmethod
     def tag(cls, tag):
         tag = tag.split(':')
 
@@ -67,45 +60,18 @@ class Exec(Obj):
 class Network(Obj):
     pass
 
-    @classmethod
-    def where_shit_goes(cls):
-        fun = NetworkApiMixin.create_network
-
-        xx = {k: (v1, v2) for k, _, v1, v2 in fuzz_arg_spec(fun)}
-        print(xx)
-
-        x = {k: v for k, (v, _) in xx.items()}
-
-        x = Hijacker.hijack(NetworkApiMixin.create_network, **x)
-
-        print(x)
-
-    @classmethod
-    def create(cls, stage: 'Stage', name, *args, **kwargs):
-        labels = kwargs.get('labels', {})
-        labels = {**labels, **{stage.label: ''}}
-        kwargs = {**kwargs, 'labels': labels}
-        name, args, kwargs = Hijacker.hijack(NetworkApiMixin.create_network, name, *args, check_duplicate=True,
-                                             **kwargs)
-
-        return kwargs['data']
-
 
 class Container(Obj):
     pass
 
 
-def build_context_get(name):
-    return getattr(BC, name)
-
-
-def build_context_set(**kwargs):
-    for k, v in kwargs.items():
-        setattr(BC, k, v)
-
-
 @classmethod
 class Docker(Op):
+    conf: Op
+
+    def dependencies(self) -> List['Op']:
+        return [self.conf]
+
     def execute(self, *args: Any):
         return build_context_get('docker')
 
@@ -176,19 +142,8 @@ class ContainerConfig(Mappable):
         return _CC(version, image, command, *(x.get(version) if isinstance(x, Mappable) else x for x in self.args))
 
 
-#
 ContainerPutFiles = Dict[str, Tuple[tarfile.TarInfo, bytes]]
 
-
-#
-#
-# class ContainerPutFiles(Dict[str, Tuple[tarfile.TarInfo, bytes]]):
-#     def merge(self, *xs: ContainerPutFiles):
-#         r = {**self}
-#         for x in xs:
-#             r = {**r, **x}
-#         return r
-#
 
 @dataclass()
 class ContainerPut(Op, DockerOp):
@@ -246,8 +201,6 @@ class ContainerPut(Op, DockerOp):
             pass
 
         file_like_object.seek(0)
-
-        print(file_like_object.getvalue())
 
         return c.api.put_archive(self.c, self.path, file_like_object.getvalue())
 
@@ -335,11 +288,6 @@ class ContainerCreate(Op, DockerOp):
 
     def execute(self, c: DockerClient):
         cfg = self.config.get(c.api.api_version, self.i['Id'], self.command)
-
-        # labels = map_none(cfg.get('Labels', {}), dict)
-        # labels[self.conf.label] = ''
-
-        # cfg['Labels'] = labels
 
         r = c.api.create_container_from_config(
             cfg,
