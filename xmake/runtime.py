@@ -3,7 +3,7 @@ from typing import Tuple, Optional
 
 from dataclasses import dataclass, replace
 
-from xmake.abstract import Ctx, Op
+from xmake.dsl import Op, Ctx
 
 
 class Step(Enum):
@@ -24,8 +24,8 @@ JOB_STATE_SUCCESSOR = {
     Step.PostExec: Step.Result,
     Step.Result: None,
 }
-JOB_STATE_PREDECESSOR = {v: k for k, v in JOB_STATE_SUCCESSOR.items()}
 
+JOB_STATE_PREDECESSOR = {v: k for k, v in JOB_STATE_SUCCESSOR.items()}
 
 JobRecID = Tuple[int, Step]
 

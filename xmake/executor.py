@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 from dataclasses import dataclass, field
 
 from xmake.dep import KeyedDeps
-from xmake.abstract import Ctx, Op
+from xmake.dsl import Op, Ctx
 from xmake.error import ExecError
 from xmake.runtime import Step, JOB_STATE_SUCCESSOR, JOB_STATE_PREDECESSOR, JobRecID, JobRec
 
@@ -63,11 +63,9 @@ class Executor:
 
             if self.should_trace:
                 # logging.getLogger(__name__).warning('[0] %s', self.get_depth(job_rec.id))
-                logging.getLogger(__name__).warning('[1] %s', job_rec.id)
-                logging.getLogger(__name__).warning('[2] %s', job_rec.job)
-                logging.getLogger(__name__).warning('[3] %s', job_deps)
+                logging.getLogger(__name__).warning('[+] %s %s -> { %s }', job_rec.id, job_rec.job, ', '.join([repr(x.job) for x in job_deps]))
                 for k, v in dict(job_rec.ctx.mappings).items():
-                    logging.getLogger(__name__).warning('[4] %s=%s', k, repr(v)[:20])
+                    logging.getLogger(__name__).warning('[=] %s=%s', k, repr(v)[:60])
 
             if job_rec.job is None:
                 exit_job_dep, = job_deps
@@ -99,11 +97,11 @@ class Executor:
             succ = JOB_STATE_SUCCESSOR.get(job_rec.step)
 
             if self.should_trace:
-                logging.getLogger(__name__).warning('[5] %s %s', job_rec.id, succ)
-                logging.getLogger(__name__).warning('[6] %s', ret)
+                logging.getLogger(__name__).warning('[-] %s %s', job_rec.id, succ)
+                logging.getLogger(__name__).warning('[_] %s', ret)
 
                 for k, v in dict(new_ctx.mappings).items():
-                    logging.getLogger(__name__).warning('[8] %s=%s', k, v)
+                    logging.getLogger(__name__).warning('[z] %s=%s', k, v)
 
             if succ:
                 self.deps.put(job_rec.with_step(succ).with_ctx(new_ctx), *deps_objs)

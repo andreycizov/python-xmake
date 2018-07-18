@@ -1,8 +1,8 @@
 import unittest
 from itertools import count
 
-from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call, Err
-from xmake.error import ExecError, OpError
+from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call, Err, OpError
+from xmake.error import ExecError
 from xmake.executor import Executor
 
 
@@ -143,3 +143,19 @@ class TestDSL(unittest.TestCase):
         except ExecError as e:
             self.assertIsInstance(e.e, OpError)
             self.assertEquals('No matching branches found 5', e.e.reason)
+
+    def test_attrs_0(self):
+        ex = Executor(should_trace=True)
+
+        r = ex.execute(
+            Con([1, 2, 3])[1:2]
+        )
+
+        self.assertEqual([2], r)
+
+        r = ex.execute(
+            Con([1, 2, 3]).len
+        )
+
+        self.assertEqual(3, r)
+

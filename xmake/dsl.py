@@ -2,80 +2,361 @@ import inspect
 import logging
 import string
 from collections import deque
-from typing import List, Any, Tuple, Callable, Union, Optional
+from typing import List, Any, Tuple, Callable, Union, Optional, TypeVar
 
 from dataclasses import dataclass, field
 
-from xmake.abstract import TRes, TPostRes, Ctx, Op, _get_caller
-from xmake.error import OpError
+from xmake.util import _get_caller, _make_cell, _enclosed
+
+TRes = TypeVar('TRes')
+TPostRes = TypeVar('TPostRes')
+
+WT = Union['Op', Any]
+
+
+def _wr(x: WT):
+    """
+    Wrap the given item in a DSL-compatible way; use only in DSL initialisers.
+
+    Please ensure that every call made to _wr has a stack size of 3 max.
+    :param x:
+    :return:
+    """
+    if isinstance(x, Op):
+        return x
+    elif callable(x):
+        # if x is a callable, it means it needs to be replaced with Eval parametrised by all of it's closure variables
+        # it also can't have any arguments.
+
+        args = _assert_callable(x)
+        assert len(args) == 0, args
+
+        caller_idx = 3
+
+        caller_locals = _get_caller(caller_idx)[0].f_locals
+        caller_globals = _get_caller(caller_idx)[0].f_globals
+        fn_freevars = x.__code__.co_freevars
+
+        # print('____________________________________________________________')
+        #
+        # for idx in [1, 2, 3, 4, 5, 6]:
+        #     print('a', idx, list(_get_caller(idx)[0].f_locals.keys()))
+        #     # print('b', idx,caller_globals)
+        #     print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        #
+        # import traceback
+        #
+        # print(''.join(traceback.format_stack()))
+        # print('=============================================================')
+
+        freevars_values = [caller_locals[x] for x in fn_freevars]
+
+        return Eval(Eval(
+            *freevars_values,
+            _enclosed(x, caller_globals),
+        ))._with_loc(Loc.from_frame_idx(5))
+    else:
+        return Con(x)
+
+
+def _check_callable(fn: Callable):
+    """Ops are always callable as part of the DSL"""
+    return callable(fn) and not isinstance(fn, Op)
+
+
+def _assert_callable(fn: Callable):
+    spec: inspect.FullArgSpec = inspect.getfullargspec(fn)
+
+    assert spec.varargs is None, spec.varargs
+    assert spec.varkw is None, spec.varkw
+    assert spec.kwonlyargs is None or spec.kwonlyargs == [], spec.kwonlyargs
+
+    return spec.args
 
 
 @dataclass()
-class LeftRightRes:
-    left: Any
-    right: Any
+class Ctx:
+    mappings: List[Tuple[str, Any]] = field(default_factory=list)
+
+    def get(self, n: str):
+        for cn, cv in self.mappings[::-1]:
+            if cn == n:
+                return cv
+        else:
+            raise KeyError(n)
+
+    def push(self, n: str, val: Any) -> 'Ctx':
+        return Ctx(self.mappings + [(n, val)])
+
+    def pop(self, n: str) -> Any:
+        idxs = range(len(self.mappings) - 1, -1, -1)
+        for idx, (cn, cv) in ((idx, self.mappings[idx]) for idx in idxs):
+            if cn == n:
+                return Ctx(self.mappings[:idx] + self.mappings[idx + 1:])
+        else:
+            raise KeyError(n)
 
 
 @dataclass
+class Loc:
+    filename: str
+    lineno: int
+
+    def __repr__(self):
+        return f'Loc("{self.filename}:{self.lineno}")'
+
+    @classmethod
+    def from_frame_idx(cls, idx: int = 3):
+        return cls.from_frame(_get_caller(idx))
+
+    @classmethod
+    def from_frame(cls, fr: inspect.FrameInfo):
+        return Loc(fr.filename, fr.lineno)
+
+
+class OpError(Exception):
+    def __init__(self, op: Optional['Op'] = None,
+                 reason: Optional[str] = None,
+                 loc: Optional[Loc] = None):
+        self.loc = loc
+        self.op = op
+        self.reason = reason
+        super().__init__(op, reason)
+
+    def __str__(self):
+        loc = ''
+
+        if self.op:
+            loc = repr(self.op._loc)
+        if self.loc:
+            loc = repr(self.loc)
+
+        items = [loc, repr(self.reason) if self.reason else None, repr(self.op) if self.op else None]
+
+        items = [x for x in items if x]
+
+        items = ', '.join(items)
+
+        return f'{self.__class__.__name__}({items})'
+
+
+class Operators:
+    def __call__(self, *args: 'WT'):
+        return Call(self, *args)
+
+    def __getattr__(self, item: 'WT'):
+        return GetAttr(self, item)
+
+    def __getitem__(self, item: 'WT'):
+        return GetItem(self, item)
+
+    def __add__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x + y)
+
+    def __sub__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x - y)
+
+    def __mul__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x * y)
+
+    def __le__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x <= y)
+
+    def __lt__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x < y)
+
+    def __eq__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x == y)
+
+    def __gt__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x > y)
+
+    def __ge__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x >= y)
+
+
+@dataclass(repr=False, eq=False)
+class Op(Operators):
+    def __post_init__(self):
+        fr = _get_caller(3)
+
+        loc = Loc.from_frame(fr)
+
+        try:
+            self._loc = loc
+        except Exception as e:
+            raise ValueError(self, fr, loc)
+
+    def _with_loc(self, loc: 'Loc') -> 'Op':
+        self._loc = loc
+        return self
+
+    def __repr__(self) -> str:
+        return f'{self.__class__.__qualname__}()'
+
+    @property
+    def logger(self):
+        return logging.getLogger(self.__module__ + '.' + self.__class__.__name__)
+
+    def context_dependencies(self, ctx: Ctx) -> Tuple[Ctx, List['Op']]:
+        """
+        :return: list of dependencies to execute before ``execute``
+        """
+        return ctx, self.dependencies()
+
+    def dependencies(self) -> List['Op']:
+        """
+        :return: list of dependencies to execute before ``execute``
+        """
+        return []
+
+    def context_execute(self, ctx: Ctx, *args: Any) -> Tuple[Ctx, TRes]:
+        res = self.execute(*args)
+        return self.context_enter(ctx, res, *args), res
+
+    def execute(self, *args: Any) -> TRes:
+        """
+        :param args: what is returned by every dependency returned by ``dependencies``
+        :return:
+        """
+        self.logger.debug('%s', args)
+        return None
+
+    def context_enter(self, ctx: Ctx, res: TRes, *args: Any) -> Ctx:
+        return ctx
+
+    def context_post_dependencies(self, ctx: Ctx, result: TRes, *pre_result: List[TRes]) -> Tuple[Ctx, List['Op']]:
+        """
+        :param result: what is returned by ``execute``
+        :param pre_result: what is returned by ``execute`` for every dependency returned by ``dependencies``
+        :return: list of dependencies to execute before ``post_execute``
+        """
+        return ctx, self.post_dependencies(result, pre_result)
+
+    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
+        """
+        :param result: what is returned by ``execute``
+        :param pre_result: what is returned by ``execute`` for every dependency returned by ``dependencies``
+        :return: list of dependencies to execute before ``post_execute``
+        """
+        return []
+
+    def context_post_execute(
+            self,
+            ctx: Ctx,
+            execute_ret: TRes,
+            pre_result: List[TRes],
+            post_result: List[TPostRes]
+    ) -> Tuple[Ctx, TPostRes]:
+        ret = self.post_execute(execute_ret, pre_result, post_result)
+
+        return self.context_exit(ctx, ret, pre_result, post_result), ret
+
+    def context_exit(self, ctx: Ctx, ret: TPostRes, pre_result: List[TRes], post_result: List[TPostRes]) -> Ctx:
+        return ctx
+
+    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
+        """
+        :param execute_ret: what is returned by ``execute``
+        :param pre_result: what is returned by every dependency returned by ``dependencies``
+        :param post_result: what is returned by every dependency returned by ``post_dependencies``
+        :return:
+        """
+        self.logger.getChild('post_execute').debug('%s %s', pre_result, post_result)
+        return execute_ret
+
+
+class NoVal:
+    def __repr__(self):
+        return 'NoVal()'
+
+    def __eq__(self, other):
+        return isinstance(other, NoVal)
+
+
+NO_VALUE = NoVal()
+
+
+@dataclass(repr=False, eq=False)
+class GetAttr(Op):
+    def __repr__(self) -> str:
+        return f'{self.__class__.__name__}({repr(self.value)}, {repr(self.name)})'
+
+    value: Op
+    name: Op
+    default: Union[NoVal, Op] = NO_VALUE
+
+    def __init__(self, value: WT, name: WT, default: Union[NoVal, WT] = NO_VALUE):
+        self.value = _wr(value)
+        self.name = _wr(name)
+        self.default = _wr(default)
+
+    def dependencies(self) -> List['Op']:
+        default = [] if self.default is NO_VALUE else [self.default]
+        return [self.value, self.name] + default
+
+    def execute(self, value_res: Any, name_res: Any, *default: Any) -> TRes:
+        if name_res == 'len':
+            try:
+                return len(value_res)
+            except TypeError:
+                if self.default is not NO_VALUE:
+                    return default[0]
+                else:
+                    raise OpError(self, 'Could not find a length value')
+        else:
+            if self.default is not NO_VALUE:
+                return getattr(value_res, name_res, *default)
+            else:
+                return getattr(value_res, name_res)
+
+
+@dataclass(repr=False, eq=False)
+class GetItem(Op):
+    value: Op
+    key: Op
+
+    def __init__(self, value: WT, key: WT):
+        self.value = _wr(value)
+        self.key = _wr(key)
+
+    def dependencies(self) -> List['Op']:
+        return [self.value, self.key]
+
+    def execute(self, value_res: Any, key_res: Any, *default: Any) -> TRes:
+        return value_res[key_res]
+
+
+@dataclass(repr=False, eq=False)
 class Con(Op):
     value: Any
+
+    def __repr__(self):
+        return f'Con({self.value})'
 
     def execute(self, *args: Any) -> TRes:
         return self.value
 
 
-@dataclass
-class DependsOn(Op):
-    pre: List[Op]
-    post: List[Op]
-
-    def dependencies(self) -> List['Op']:
-        return self.pre
-
-    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
-        return self.post
-
-    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
-        return LeftRightRes(pre_result, post_result)
-
-
 VarName = str
 
 
-@dataclass
+@dataclass(repr=False, eq=False)
 class Var(Op):
     name: VarName
+
+    def __repr__(self):
+        return f'Var({self.name})'
 
     def context_execute(self, ctx: Ctx, *args: Any) -> Tuple[Ctx, TRes]:
         try:
             return ctx, ctx.get(self.name)
         except KeyError:
+            # can this operation return a function that, given
             raise OpError(self, f'No variable mapping found `{self.name}`')
 
 
-EVAL_DICT = string.ascii_lowercase
-
-
-def _eval_map_args(iter_obj):
-    def _map_dict(x):
-        r = ''
-        while True:
-            next_idx = x % len(EVAL_DICT)
-            r += EVAL_DICT[next_idx]
-            x //= len(EVAL_DICT)
-
-            if x == 0:
-                break
-        return r
-
-    r1, r2 = {}, {}
-    for i, v in enumerate(iter_obj):
-        r1[_map_dict(i)] = v
-        r2[f'x{i}'] = v
-    return {**r1, **r2}
-
-
-@dataclass
+@dataclass(repr=False, eq=False)
 class Log(Op):
     node: Op
     name: str = field(default_factory=lambda: __name__)
@@ -118,7 +399,7 @@ class Log(Op):
         return arg
 
 
-@dataclass
+@dataclass(repr=False, eq=False)
 class Err(Op):
     msg: Optional[str]
     args: List[Op]
@@ -143,22 +424,51 @@ class Err(Op):
         raise OpError(self, reason=msg)
 
 
-@dataclass
+EVAL_DICT = string.ascii_lowercase
+
+
+def _map_eval_args(iter_obj):
+    """Build a locals dict for Eval"""
+
+    def _map_dict(x):
+        r = ''
+        while True:
+            next_idx = x % len(EVAL_DICT)
+            r += EVAL_DICT[next_idx]
+            x //= len(EVAL_DICT)
+
+            if x == 0:
+                break
+        return r
+
+    r1, r2 = {}, {}
+    for i, v in enumerate(iter_obj):
+        r1[_map_dict(i)] = v
+        r2[f'x{i}'] = v
+    return {**r1, **r2}
+
+
+@dataclass(repr=False, eq=False)
 class Eval(Op):
     args: List[Op]
     body: Union[str, Callable, Op]
 
     def __init__(self, *args: Union[str, Callable, Op]):
-        for arg in args[:-1]:
-            assert isinstance(arg, Op), arg
-
         body = args[-1]
-        assert isinstance(body, (str, Callable, Op))
 
         self.body = body
-        self.args = args[:-1]
+        self.args = [_wr(x) for x in args[:-1]]
+
+        for arg in self.args:
+            assert isinstance(arg, Op), arg
+
+        assert isinstance(body, (str, Callable, Op))
 
         self.__post_init__()
+
+    def __repr__(self) -> str:
+        args = ', '.join(repr(a) for a in self.args)
+        return f'{self.__class__.__name__}({args}, {repr(self.body)})'
 
     def dependencies(self) -> List['Op']:
         if isinstance(self.body, Op):
@@ -173,7 +483,7 @@ class Eval(Op):
         if isinstance(self.body, Op):
             return args[0]
         elif isinstance(self.body, str):
-            r = _eval_map_args(args)
+            r = _map_eval_args(args)
             return eval(self.body, {}, r)
         elif callable(self.body):
             return self.body(*args)
@@ -182,6 +492,9 @@ class Eval(Op):
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         if isinstance(self.body, Op):
+            if not isinstance(result, Op):
+                raise OpError(self, f'`{result}` returned to Eval is not an Op')
+
             return [result]
         else:
             return []
@@ -195,12 +508,15 @@ class Eval(Op):
 
 # fun agg(agg) -> (agg, agg + 1) if
 
-@dataclass
+@dataclass(repr=False, eq=False)
 class Iter(Op):
     map: Var
     aggregator: Op
     next_op: Op
     map_op: Op
+
+    def __repr__(self):
+        return f'{self.__class__.__qualname__}({repr(self.map)}={repr(self.aggregator)} next={repr(self.next_op)})(<body omitted>)'
 
     def dependencies(self) -> List['Op']:
         # how do we pass an aggregator to the dependency ?
@@ -233,13 +549,37 @@ class Iter(Op):
             return None
 
 
-@dataclass
+@dataclass(repr=False, eq=False)
 class With(Op):
     vars: List[Var]
     vals: List[Op]
     map_op: Op
 
-    def __init__(self, *args: Union[Var, Op]):
+    def __repr__(self):
+        vals = ', '.join(f'{repr(n)}={repr(v)}' for n, v in zip(self.vars, self.vals))
+        body = repr(self.map_op)
+        return f'{self.__class__.__qualname__}({vals})(<body omitted>)'
+
+    @classmethod
+    def from_ext(cls, *args: WT):
+        *args, fn = args
+        vars = _assert_callable(fn)
+        assert len(vars) == len(args), (vars, args)
+
+        ret = []
+
+        for var, val in zip(vars, args):
+            ret.append(Var(var))
+            ret.append(val)
+
+        ret.append(fn(*[Var(var) for var in vars]))
+
+        return ret
+
+    def __init__(self, *args: WT):
+        if _check_callable(args[-1]):
+            args = self.from_ext(*args)
+
         args = deque(args)
         vars = []
         vals = []
@@ -248,6 +588,7 @@ class With(Op):
             assert isinstance(var, Var), var
             vars.append(var)
             val = args.popleft()
+            val = _wr(val)
             assert isinstance(val, Op), val
             vals.append(val)
 
@@ -285,22 +626,59 @@ class With(Op):
         return ctx, post_result[0]
 
 
-@dataclass
+@dataclass(repr=False, eq=False)
 class Case:
     match_op: Op
     map_op: Op
 
+    def __init__(self, match_op: WT, map_op: WT):
+        self.match_op = _wr(match_op)
+        self.map_op = _wr(map_op)
 
-@dataclass(init=False)
+        assert isinstance(self.match_op, Op), self.match_op
+        assert isinstance(self.map_op, Op), self.map_op
+
+
+@dataclass(repr=False, init=False)
 class Match(Op):
     map: Var
     value_op: Op
     cases: List[Case]
 
-    def __init__(self, map: Var, value_up: Op, case: Case, *args: Case):
-        self.map = map
-        self.value_op = value_up
-        self.cases = [case] + list(args)
+    @classmethod
+    def from_ext(cls, value: WT, fn: Callable):
+        args = _assert_callable(fn)
+
+        assert len(args) == 1, args
+
+        map_name, = args
+        map = Var(map_name)
+
+        cases = fn(map)
+
+        value_op = value
+
+        return map, value_op, cases
+
+    def __init__(self, *args: WT):
+        if _check_callable(args[-1]):
+            assert len(args) == 2, args
+
+            map, value_op, cases = self.from_ext(*args)
+        else:
+            map, value_op, *cases = args
+
+            assert len(cases) >= 1, cases
+
+        self.map = _wr(map)
+        self.value_op = _wr(value_op)
+        self.cases = cases
+
+        assert isinstance(self.map, Op), self.map
+        assert isinstance(self.value_op, Op), self.value_op
+
+        for case in self.cases:
+            assert isinstance(case, Case)
 
         self.__post_init__()
 
@@ -312,9 +690,9 @@ class Match(Op):
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         if result:
-            return [With(self.map, self.value_op, self.cases[0].map_op)]
+            return [With(self.map, self.value_op, self.cases[0].map_op)._with_loc(self._loc)]
         elif len(self.cases) > 1:
-            return [Match(self.map, self.value_op, *self.cases[1:])]
+            return [Match(self.map, self.value_op, *self.cases[1:])._with_loc(self._loc)]
         else:
             return []
 
@@ -325,14 +703,33 @@ class Match(Op):
             return post_result[0]
 
 
-# cps is when one function calls the other function
-
-@dataclass(init=False)
+@dataclass(repr=False, init=False)
 class Fun(Op):
     args: List[Var]
     body: Op
 
-    def __init__(self, *params: Union[Var, Op]):
+    @classmethod
+    def from_ext(cls, fn: Callable):
+        rtn_parms = []
+
+        args = _assert_callable(fn)
+
+        for arg in args:
+            arg = Var(arg)
+
+            rtn_parms.append(arg)
+
+        fun_body = fn(*rtn_parms)
+
+        assert isinstance(fun_body, Op)
+
+        return rtn_parms + [fun_body]
+
+    def __init__(self, *params: WT):
+        if _check_callable(params[-1]):
+            assert len(params) == 1
+            params = self.from_ext(*params)
+
         *args, body = params
 
         found = set()
@@ -360,14 +757,16 @@ class Fun(Op):
         return self
 
 
-@dataclass(init=False)
+@dataclass(repr=False, init=False)
 class Call(Op):
+    # todo call is responsible for currying.!
+
     fun: Op
     args: List[Op]
 
-    def __init__(self, fun: Op, *args: Op):
-        self.fun = fun
-        self.args = list(args)
+    def __init__(self, fun: WT, *args: WT):
+        self.fun = _wr(fun)
+        self.args = [_wr(x) for x in args]
 
         self.__post_init__()
 
@@ -407,12 +806,16 @@ class Call(Op):
         return ctx, post_result[0]
 
 
-@dataclass()
 class Seq(Op):
     ops: List[Op]
 
-    def __init__(self, *ops: Op):
-        self.ops = tuple(ops)
+    def __init__(self, *ops: WT):
+        wr_ops = []
+
+        for op in ops:
+            wr_ops.append(_wr(op))
+
+        self.ops = wr_ops
 
         self.__post_init__()
 
@@ -445,12 +848,11 @@ class Seq(Op):
             return execute_ret
 
 
-@dataclass()
 class Par(Op):
     ops: List[Op]
 
-    def __init__(self, *ops: Op):
-        self.ops = list(ops)
+    def __init__(self, *ops: WT):
+        self.ops = [_wr(x) for x in ops]
 
         self.__post_init__()
 
@@ -465,7 +867,6 @@ class Par(Op):
         return list(args)
 
 
-@dataclass()
 class CPS(Op):
     arg: Var
     ret: Var

@@ -2,7 +2,6 @@ import io
 import logging
 import os
 import tarfile
-import threading
 from _signal import SIGTERM
 from datetime import datetime
 from os.path import expanduser
@@ -14,8 +13,7 @@ from docker import DockerClient
 from docker.constants import DEFAULT_DOCKER_API_VERSION
 from docker.types import ContainerConfig as _CC, HostConfig as _HC
 
-from xmake.dsl import Var
-from xmake.abstract import TRes, Op
+from xmake.dsl import Var, Op, TRes
 
 
 class Obj(dict):
@@ -66,6 +64,17 @@ class Container(Obj):
     pass
 
 
+@dataclass
+class DockerClientWrapper:
+    cli: DockerClient
+
+    def __getattr__(self, item):
+        return getattr(self.cli, item)
+
+    def __del__(self):
+        self.cli.close()
+
+
 @dataclass()
 class Docker(Op):
     conf: Op = field(default_factory=lambda: Var('docker'))
@@ -75,7 +84,7 @@ class Docker(Op):
 
     def execute(self, arg: Union[DockerClient, str]):
         if isinstance(arg, str):
-            return DockerClient(arg)
+            return DockerClientWrapper(DockerClient(arg))
         else:
             return arg
 
@@ -193,6 +202,14 @@ class ContainerPut(DockerOp):
             r[path] = (ti, contents)
         return r
 
+    @classmethod
+    def tarinfos_dir(cls, from_dir='.', to_dir='.', modes=None, time: Optional[datetime] = None):
+        files = {}
+        for curr_dir, _, fils in os.walk(from_dir):
+            for fil in fils:
+                files[os.path.join(to_dir, curr_dir, fil)] = os.path.join(from_dir, curr_dir, fil)
+        return cls.tarinfos_files(files, modes=modes, time=time)
+
     def execute(self, c: DockerClient):
         file_like_object = io.BytesIO()
         tar = tarfile.open(fileobj=file_like_object, mode='w')
@@ -250,6 +267,7 @@ class ImagePull(DockerOp):
         if stream:
             for x in r:
                 logging.getLogger(__name__ + f'.{self.__class__.__name__}').debug('%s', x)
+            return Image({'Id': self.tag})
         else:
             return r
 
