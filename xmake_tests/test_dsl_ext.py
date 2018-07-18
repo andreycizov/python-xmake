@@ -1,6 +1,6 @@
 import unittest
 
-from xmake.dsl import Seq, Fun, Match, Case, Err, With, Con, OpError
+from xmake.dsl import Seq, Fun, Match, Case, Err, With, Con, OpError, Map, Fil
 from xmake.error import ExecError
 from xmake.executor import Executor
 
@@ -121,3 +121,50 @@ class TestDSLExt(unittest.TestCase):
         ret = Executor(should_trace=True).execute(ex)
 
         self.assertEqual('a', ret)
+
+    def test_map_0(self):
+        ex = Executor(should_trace=True)
+
+        inp = [1, 2, 3]
+
+        r = ex.execute(
+            Map(
+                lambda x: x * x,
+                Con(inp),
+            )
+        )
+
+        self.assertEqual([x * x for x in inp], r)
+
+    def test_fil_0(self):
+        ex = Executor(should_trace=True)
+
+        inp = [1, 2, 3]
+
+        r = ex.execute(
+            Fil(
+                lambda b: b > 1,
+                Con(inp),
+            )
+        )
+
+        self.assertEqual([x for x in inp if x > 1], r)
+
+    def test_callable_2_0(self):
+        with self.assertRaises(KeyError):
+            ex = Map(
+                lambda x: lambda: Con(x),
+                [1, 2, 3]
+            )
+
+            self.assertEqual([1, 2, 3], Executor(should_trace=True).execute(ex))
+
+    def test_callable_2_1(self):
+        ex = Map(
+            lambda x: Seq(
+                lambda: Con(x),
+            ),
+            [1, 2, 3]
+        )
+
+        self.assertEqual([1, 2, 3], Executor(should_trace=True).execute(ex))

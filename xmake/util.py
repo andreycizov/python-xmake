@@ -2,15 +2,18 @@ import inspect
 import sys
 
 
-def _get_outer_frames(frame, context=1):
+def _get_outer_frames(frame, context=1, full_impl=True):
     """Get a list of records for a frame and all higher (calling) frames.
 
     Each record contains a frame object, filename, line number, function
     name, a list of lines of context, and index within the context."""
     #framelist = []
     while frame:
-        frameinfo = (frame,) + inspect.getframeinfo(frame, context)
-        yield inspect.FrameInfo(*frameinfo)
+        if full_impl:
+            frameinfo = (frame,) + inspect.getframeinfo(frame, context)
+            yield inspect.FrameInfo(*frameinfo)
+        else:
+            yield frame, None
 
         if frame == frame.f_back:
             raise IndexError
@@ -31,9 +34,12 @@ def _iter_idx(iter_obj, nth):
             return x
 
 
-def _get_caller(depth=2) -> inspect.FrameInfo:
+def _get_caller(depth=2, stdlib_impl=False) -> inspect.FrameInfo:
     """Get caller frame"""
-    caller = _iter_idx(_get_stack(), depth)
+    if stdlib_impl:
+        caller = inspect.stack()[depth]
+    else:
+        caller = _iter_idx(_get_stack(), depth)
     return caller
 
 

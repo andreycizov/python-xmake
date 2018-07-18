@@ -6,7 +6,7 @@ from typing import List, Any, Tuple, Callable, Union, Optional, TypeVar
 
 from dataclasses import dataclass, field
 
-from xmake.util import _get_caller, _make_cell, _enclosed
+from xmake.util import _get_caller, _enclosed
 
 TRes = TypeVar('TRes')
 TPostRes = TypeVar('TPostRes')
@@ -31,30 +31,36 @@ def _wr(x: WT):
         args = _assert_callable(x)
         assert len(args) == 0, args
 
-        caller_idx = 3
+        for caller_idx in [3]:
+            # caller_idx = 3
 
-        caller_locals = _get_caller(caller_idx)[0].f_locals
-        caller_globals = _get_caller(caller_idx)[0].f_globals
-        fn_freevars = x.__code__.co_freevars
+            caller_locals = _get_caller(caller_idx)[0].f_locals
+            caller_globals = _get_caller(caller_idx)[0].f_globals
+            fn_freevars = x.__code__.co_freevars
 
-        # print('____________________________________________________________')
-        #
-        # for idx in [1, 2, 3, 4, 5, 6]:
-        #     print('a', idx, list(_get_caller(idx)[0].f_locals.keys()))
-        #     # print('b', idx,caller_globals)
-        #     print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        #
-        # import traceback
-        #
-        # print(''.join(traceback.format_stack()))
-        # print('=============================================================')
+            # print('____________________________________________________________')
+            #
+            # for idx in [1, 2, 3, 4, 5, 6]:
+            #     print('a', idx, list(_get_caller(idx)[0].f_locals.keys()))
+            #     # print('b', idx,caller_globals)
+            #     print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            #
+            # import traceback
+            #
+            # print(''.join(traceback.format_stack()))
+            # print('=============================================================')
+            try:
+                freevars_values = [caller_locals[x] for x in fn_freevars]
+            except KeyError:
+                continue
+            else:
+                return Eval(Eval(
+                    *freevars_values,
+                    _enclosed(x, caller_globals),
+                ))._with_loc(Loc.from_frame_idx(5))
+        else:
+            raise KeyError('None')
 
-        freevars_values = [caller_locals[x] for x in fn_freevars]
-
-        return Eval(Eval(
-            *freevars_values,
-            _enclosed(x, caller_globals),
-        ))._with_loc(Loc.from_frame_idx(5))
     else:
         return Con(x)
 
@@ -150,6 +156,8 @@ class Operators:
     def __getitem__(self, item: 'WT'):
         return GetItem(self, item)
 
+    # math
+
     def __add__(self, other: 'WT'):
         return Eval(self, other, lambda x, y: x + y)
 
@@ -158,6 +166,27 @@ class Operators:
 
     def __mul__(self, other: 'WT'):
         return Eval(self, other, lambda x, y: x * y)
+
+    def __truediv__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x / y)
+
+    def __divmod__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: divmod(x, y))
+
+    # binary
+
+    def __and__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x and y)
+
+    def __or__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x or y)
+
+    # sets
+
+    def __contains__(self, other: 'WT'):
+        return Eval(self, other, lambda x, y: x in y)
+
+    # comparison
 
     def __le__(self, other: 'WT'):
         return Eval(self, other, lambda x, y: x <= y)
@@ -362,10 +391,12 @@ class Log(Op):
     name: str = field(default_factory=lambda: __name__)
     msg: Optional[str] = None
 
-    def __init__(self, *args: Union[str, Op]):
+    def __init__(self, *args: WT):
         guessed_name = inspect.getmodule(_get_caller(2)[0]).__name__
 
         *args, node = args
+
+        node = _wr(node)
 
         assert isinstance(node, Op), node
 
@@ -865,6 +896,129 @@ class Par(Op):
 
     def execute(self, *args: Any) -> TRes:
         return list(args)
+
+
+class Arr(Op):
+    items: List[Op]
+
+    def __init__(self, *args: Op):
+        self.items = args
+
+        self.__post_init__()
+
+    def dependencies(self) -> List['Op']:
+        return self.items
+
+    def execute(self, *args: Any) -> TRes:
+        return args
+
+
+class Map(Op):
+    target: Var
+    map: Op
+    iter: Op
+
+    @classmethod
+    def from_ext(cls, map_fn: Callable, it: WT):
+        map_arg, = _assert_callable(map_fn)
+
+        target = Var(map_arg)
+
+        map = map_fn(target)
+
+        return target, map, it
+
+    def __init__(self, *args: WT):
+        if _check_callable(args[0]):
+            tar, map, it = self.from_ext(*args)
+        else:
+            tar, map, it = args
+
+        self.target = _wr(tar)
+        self.map = _wr(map)
+        self.iter = _wr(it)
+
+        assert isinstance(self.target, Op)
+        assert isinstance(self.map, Op)
+        assert isinstance(self.iter, Op)
+
+    def dependencies(self) -> List['Op']:
+        return [self.iter]
+
+    def execute(self, arg) -> TRes:
+        return arg
+
+    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
+        if not isinstance(result, list):
+            raise OpError(self, f'Returned iterable `{result}` is not a list')
+
+        return [
+            With(
+                self.target,
+                Con(x),
+                self.map
+            )
+            for x in result
+        ]
+
+    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
+        return [
+            x for x in post_result
+        ]
+
+
+class Fil(Op):
+    target: Var
+    filter: Op
+    iter: Op
+
+    @classmethod
+    def from_ext(cls, fil: Callable, it: WT):
+        fil_arg, = _assert_callable(fil)
+
+        target = Var(fil_arg)
+
+        fil = fil(target)
+
+        return target, fil, it
+
+    def __init__(self, *args: WT):
+        if _check_callable(args[0]):
+            tar, fil, it = self.from_ext(*args)
+        else:
+            tar, fil, it = args
+
+        self.target = _wr(tar)
+        self.filter = _wr(fil)
+        self.iter = _wr(it)
+
+        assert isinstance(self.target, Op)
+        assert isinstance(self.filter, Op)
+        assert isinstance(self.iter, Op)
+
+    def dependencies(self) -> List['Op']:
+        return [self.iter]
+
+    def execute(self, arg) -> TRes:
+        return arg
+
+    def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
+        if not isinstance(result, list):
+            raise OpError(self, f'Returned iterable `{result}` is not a list')
+
+        return [
+            With(
+                self.target,
+                Con(x),
+                Arr(self.target, self.filter)
+            )
+            for x in result
+        ]
+
+    def post_execute(self, execute_ret: TRes, pre_result: List[TRes], post_result: List[TPostRes]) -> TPostRes:
+        return [
+            x for x, f in post_result if f
+        ]
 
 
 class CPS(Op):

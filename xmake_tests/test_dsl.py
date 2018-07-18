@@ -1,7 +1,6 @@
 import unittest
-from itertools import count
 
-from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call, Err, OpError
+from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call, Err, OpError, Map, Fil
 from xmake.error import ExecError
 from xmake.executor import Executor
 
@@ -158,4 +157,64 @@ class TestDSL(unittest.TestCase):
         )
 
         self.assertEqual(3, r)
+
+    def test_map_0(self):
+        ex = Executor(should_trace=True)
+
+        inp = [1, 2, 3]
+
+        r = ex.execute(
+            Map(
+                Var('x'),
+                Var('x') * Var('x'),
+                Con(inp),
+            )
+        )
+
+        self.assertEqual([x * x for x in inp], r)
+
+    def test_fil_1(self):
+        ex = Executor(should_trace=True)
+
+        inp = [1, 2, 3]
+
+        r = ex.execute(
+            Fil(
+                Var('x'),
+                Var('x') > Con(1),
+                Con(inp),
+            )
+        )
+
+        self.assertEqual([x for x in inp if x > 1], r)
+
+    def test_map_err_0(self):
+        ex = Executor(should_trace=True)
+
+        try:
+            r = ex.execute(
+                Map(
+                    Var('x'),
+                    Var('x') > Con(1),
+                    Con(1),
+                )
+            )
+        except ExecError as e:
+            self.assertIsInstance(e.e, OpError)
+            self.assertEqual('Returned iterable `1` is not a list', e.e.reason)
+
+    def test_fil_err_0(self):
+        ex = Executor(should_trace=True)
+
+        try:
+            r = ex.execute(
+                Fil(
+                    Var('x'),
+                    Var('x') > Con(1),
+                    Con(1),
+                    )
+            )
+        except ExecError as e:
+            self.assertIsInstance(e.e, OpError)
+            self.assertEqual('Returned iterable `1` is not a list', e.e.reason)
 

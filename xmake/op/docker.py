@@ -12,6 +12,7 @@ from dataclasses import field, dataclass
 from docker import DockerClient
 from docker.constants import DEFAULT_DOCKER_API_VERSION
 from docker.types import ContainerConfig as _CC, HostConfig as _HC
+from docker.utils import split_command
 
 from xmake.dsl import Var, Op, TRes
 
@@ -61,7 +62,12 @@ class Network(Obj):
 
 
 class Container(Obj):
-    pass
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        if 'Command' in self and isinstance(self['Command'], str):
+            self.update({'Command': split_command(self['Command'])})
 
 
 @dataclass
@@ -153,6 +159,149 @@ class ContainerConfig(Mappable):
 
     def get(self, version, image, command) -> _CC:
         return _CC(version, image, command, *(x.get(version) if isinstance(x, Mappable) else x for x in self.args))
+
+
+@dataclass()
+class ContainerCreate(DockerOp):
+    i: Image
+    name: Optional[str] = None
+    command: List[str] = field(default_factory=list)
+    config: ContainerConfig = field(default_factory=ContainerConfig)
+
+    def execute(self, c: DockerClient):
+        cfg = self.config.get(c.api.api_version, self.i['Id'], self.command)
+
+        r = c.api.create_container_from_config(
+            cfg,
+            name=self.name)
+
+        return Container(r)
+
+
+@dataclass()
+class ContainerList(DockerOp):
+    quiet: bool = False
+    all: bool = True
+    filters: Optional[Dict[str, Union[List[str], str]]] = None
+
+    def execute(self, c: DockerClient):
+        return [Container(x) for x in c.api.containers(quiet=self.quiet, all=self.all, filters=self.filters)]
+
+
+@dataclass()
+class ContainerKill(DockerOp):
+    c: Container
+    signal: int = SIGTERM
+
+    def execute(self, c: DockerClient):
+        return c.api.kill(c['Id'], self.signal)
+
+
+@dataclass()
+class ContainerRemove(DockerOp):
+    c: Container
+    v = True
+    link = False
+    force = True
+
+    def execute(self, c: DockerClient):
+        r = c.api.remove_container(self.c.id, self.v, self.link, self.force)
+
+        return r
+
+
+@dataclass()
+class ContainerStart(DockerOp):
+    c: Container
+
+    def execute(self, c: DockerClient):
+        x1 = self.c.get('State')
+        x2 = self.c.get('Id')
+        assert x1 not in ['running'], f'Status is {x1}'
+        assert x2, 'Must be hydrated'
+
+        return c.api.start(self.c['Id'])
+
+
+@dataclass()
+class ContainerAttach(DockerOp):
+    c: Container
+
+    def execute(self, c: DockerClient):
+        x1 = self.c.get('State')
+        x2 = self.c.get('Id')
+        assert x1 not in ['running'], f'Status is {x1}'
+        assert x2, 'Must be hydrated'
+
+        r = c.api.attach(self.c['Id'], stream=True, logs=True)
+
+        for pkt in log_packets(self, r):
+            continue
+
+
+@dataclass()
+class ContainerLogs(DockerOp):
+    c: Container
+
+    def execute(self, c: DockerClient):
+        x1 = self.c.get('State')
+        x2 = self.c.get('Id')
+        assert x1 not in ['running'], f'Status is {x1}'
+        assert x2, 'Must be hydrated'
+
+        r = c.api.logs(self.c['Id'], stream=True, timestamps=True)
+
+        for x in r:
+            print(x)
+
+        return r
+
+
+@dataclass()
+class ContainerWait(DockerOp):
+    c: Container
+    timeout: Optional[float] = 10
+
+    def execute(self, c: DockerClient):
+        x1 = self.c.get('State')
+        x2 = self.c.get('Id')
+        assert x1 not in ['running'], f'Status is {x1}'
+        assert x2, 'Must be hydrated'
+
+        r = c.api.wait(self.c['Id'], timeout=self.timeout)
+
+        return r
+
+
+@dataclass()
+class ContainerCommit(DockerOp):
+    c: Container
+    tag: Optional[str] = None
+    message: Optional[str] = None
+    author: Optional[str] = None
+    changes: Optional[Union[str, List[str]]] = None
+    conf: Optional[Dict[str, Any]] = None
+
+    def execute(self, c: DockerClient):
+        repo, tag = None, None
+
+        if self.tag:
+            repo, tag = Image.tag(self.tag).split(':')
+
+        return Image(c.api.commit(self.c.id, repo, tag, self.message, self.author, self.changes, self.conf))
+
+
+@dataclass()
+class ContainerPause(DockerOp):
+    c: Container
+
+    def execute(self, c: DockerClient):
+        x1 = self.c.get('State')
+        x2 = self.c.get('Id')
+        # assert x1 not in ['running'], f'Status is {x1}'
+        # assert x2, 'Must be hydrated'
+
+        return c.api.pause(self.c.id)
 
 
 ContainerPutFiles = Dict[str, Tuple[tarfile.TarInfo, bytes]]
@@ -316,115 +465,6 @@ class ExecStart(DockerOp):
         r = c.api.exec_start(self.e.id, stream=True)
         for pkt in log_packets(self, r):
             continue
-
-
-@dataclass()
-class ContainerList(DockerOp):
-    quiet: bool = False
-    all: bool = True
-    filters: Optional[Dict[str, Union[List[str], str]]] = None
-
-    def execute(self, c: DockerClient):
-        return [Container(x) for x in c.api.containers(quiet=self.quiet, all=self.all, filters=self.filters)]
-
-
-@dataclass()
-class ContainerCreate(DockerOp):
-    i: Image
-    name: Optional[str] = None
-    command: List[str] = field(default_factory=list)
-    config: ContainerConfig = field(default_factory=ContainerConfig)
-
-    def execute(self, c: DockerClient):
-        cfg = self.config.get(c.api.api_version, self.i['Id'], self.command)
-
-        r = c.api.create_container_from_config(
-            cfg,
-            name=self.name)
-
-        return Container(r)
-
-
-@dataclass()
-class ContainerKill(DockerOp):
-    c: Container
-    signal: int = SIGTERM
-
-    def execute(self, c: DockerClient):
-        return c.api.kill(c['Id'], self.signal)
-
-
-@dataclass()
-class ContainerRemove(DockerOp):
-    c: Container
-    v = True
-    link = False
-    force = True
-
-    def execute(self, c: DockerClient):
-        r = c.api.remove_container(self.c.id, self.v, self.link, self.force)
-
-        return r
-
-
-@dataclass()
-class ContainerStart(DockerOp):
-    c: Container
-
-    def execute(self, c: DockerClient):
-        x1 = self.c.get('State')
-        x2 = self.c.get('Id')
-        assert x1 not in ['running'], f'Status is {x1}'
-        assert x2, 'Must be hydrated'
-
-        return c.api.start(self.c['Id'])
-
-
-@dataclass()
-class ContainerAttach(DockerOp):
-    c: Container
-
-    def execute(self, c: DockerClient):
-        x1 = self.c.get('State')
-        x2 = self.c.get('Id')
-        assert x1 not in ['running'], f'Status is {x1}'
-        assert x2, 'Must be hydrated'
-
-        r = c.api.attach(self.c['Id'], stream=True, logs=True)
-
-        for pkt in log_packets(self, r):
-            continue
-
-
-@dataclass()
-class ContainerCommit(DockerOp):
-    c: Container
-    tag: Optional[str] = None
-    message: Optional[str] = None
-    author: Optional[str] = None
-    changes: Optional[Union[str, List[str]]] = None
-    conf: Optional[Dict[str, Any]] = None
-
-    def execute(self, c: DockerClient):
-        repo, tag = None, None
-
-        if self.tag:
-            repo, tag = Image.tag(self.tag).split(':')
-
-        return Image(c.api.commit(self.c.id, repo, tag, self.message, self.author, self.changes, self.conf))
-
-
-@dataclass()
-class ContainerPause(DockerOp):
-    c: Container
-
-    def execute(self, c: DockerClient):
-        x1 = self.c.get('State')
-        x2 = self.c.get('Id')
-        # assert x1 not in ['running'], f'Status is {x1}'
-        # assert x2, 'Must be hydrated'
-
-        return c.api.pause(self.c.id)
 
 
 @dataclass()
