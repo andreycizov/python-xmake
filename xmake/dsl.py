@@ -2,9 +2,9 @@ import inspect
 import logging
 import string
 from collections import deque
-from typing import List, Any, Tuple, Callable, Union, Optional, TypeVar
 
 from dataclasses import dataclass, field
+from typing import List, Any, Tuple, Callable, Union, Optional, TypeVar
 
 from xmake.util import _get_caller, _enclosed
 
@@ -57,7 +57,7 @@ def _wr(x: WT):
                 return Eval(Eval(
                     *freevars_values,
                     _enclosed(x, caller_globals),
-                ))._with_loc(Loc.from_frame_idx(5))
+                )._with_loc(Loc.from_frame_idx(4)))._with_loc(Loc.from_frame_idx(4))
         else:
             raise KeyError('None')
 
@@ -111,6 +111,9 @@ class Loc:
     def __repr__(self):
         return f'Loc("{self.filename}:{self.lineno}")'
 
+    def shift(self, lineno=0):
+        return Loc(self.filename, self.lineno + lineno)
+
     @classmethod
     def from_frame_idx(cls, idx: int = 3):
         return cls.from_frame(_get_caller(idx))
@@ -124,16 +127,22 @@ class OpError(Exception):
     def __init__(self, op: Optional['Op'] = None,
                  reason: Optional[str] = None,
                  loc: Optional[Loc] = None):
-        self.loc = loc
+        self._loc = loc
         self.op = op
         self.reason = reason
         super().__init__(op, reason)
 
+    @property
+    def loc(self):
+        if self.op:
+            return self.op._loc
+        if self._loc:
+            return self._loc
+        return None
+
     def __str__(self):
         loc = ''
 
-        if self.op:
-            loc = repr(self.op._loc)
         if self.loc:
             loc = repr(self.loc)
 

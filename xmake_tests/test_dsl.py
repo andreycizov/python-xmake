@@ -1,6 +1,6 @@
 import unittest
 
-from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call, Err, OpError, Map, Fil
+from xmake.dsl import Con, Iter, Eval, Var, With, Match, Case, Fun, Call, Err, OpError, Map, Fil, Loc
 from xmake.error import ExecError
 from xmake.executor import Executor
 
@@ -141,7 +141,8 @@ class TestDSL(unittest.TestCase):
             )
         except ExecError as e:
             self.assertIsInstance(e.e, OpError)
-            self.assertEquals('No matching branches found 5', e.e.reason)
+            self.assertEqual('No matching branches found 5', e.e.reason)
+            self.assertEqual(Loc.from_frame_idx(2).shift(-7), e.e.loc)
 
     def test_attrs_0(self):
         ex = Executor(should_trace=True)
@@ -202,6 +203,7 @@ class TestDSL(unittest.TestCase):
         except ExecError as e:
             self.assertIsInstance(e.e, OpError)
             self.assertEqual('Returned iterable `1` is not a list', e.e.reason)
+            self.assertEqual(Loc.from_frame_idx(2).shift(-10), e.e.loc)
 
     def test_fil_err_0(self):
         ex = Executor(should_trace=True)
@@ -217,4 +219,5 @@ class TestDSL(unittest.TestCase):
         except ExecError as e:
             self.assertIsInstance(e.e, OpError)
             self.assertEqual('Returned iterable `1` is not a list', e.e.reason)
+            self.assertEqual(Loc.from_frame_idx(2).shift(-10), e.e.loc)
 

@@ -1,6 +1,6 @@
 import unittest
 
-from xmake.dsl import Seq, Fun, Match, Case, Err, With, Con, OpError, Map, Fil
+from xmake.dsl import Seq, Fun, Match, Case, Err, With, Con, OpError, Map, Fil, Loc
 from xmake.error import ExecError
 from xmake.executor import Executor
 
@@ -75,6 +75,7 @@ class TestDSLExt(unittest.TestCase):
         except ExecError as e:
             self.assertIsInstance(e.e, OpError)
             self.assertEquals('`a` returned to Eval is not an Op', e.e.reason)
+            self.assertEqual(Loc.from_frame_idx(2).shift(-9), e.e.loc)
 
     def test_callable_01(self):
         ex = With(
@@ -149,6 +150,42 @@ class TestDSLExt(unittest.TestCase):
         )
 
         self.assertEqual([x for x in inp if x > 1], r)
+
+    def test_fil_01(self):
+        ex = Executor(should_trace=True)
+
+        inp = [1, 2, 3]
+
+        try:
+            r = ex.execute(
+                Fil(
+                    lambda b: Seq(
+                        lambda: True
+                    ),
+                    Con(inp),
+                )
+            )
+        except ExecError as e:
+            self.assertIsInstance(e.e, OpError)
+            self.assertEqual('`True` returned to Eval is not an Op', e.e.reason)
+            self.assertEqual(Loc.from_frame_idx(2).shift(-8), e.e.loc)
+
+    def test_fil_02(self):
+        ex = Executor(should_trace=True)
+
+        inp = [1, 2, 3]
+
+        try:
+            r = ex.execute(
+                Fil(
+                    lambda b: lambda: True,
+                    Con(inp),
+                )
+            )
+        except ExecError as e:
+            self.assertIsInstance(e.e, OpError)
+            self.assertEqual('`True` returned to Eval is not an Op', e.e.reason)
+            self.assertEqual(Loc.from_frame_idx(2).shift(-6), e.e.loc)
 
     def test_callable_2_0(self):
         with self.assertRaises(KeyError):
