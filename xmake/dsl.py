@@ -396,6 +396,58 @@ class Var(Op):
 
 @dataclass(repr=False, eq=False)
 class Log(Op):
+    """
+    Log a node return value using python logging. It has 3 forms.
+
+    .. code-block:: python
+        :linenos:
+
+        Log(__name__, '%s', 1),
+        Log(__name__, '%s %s', 1, 2),
+        Log('%s', 1),
+        Log('%s %s', 1, 2),
+
+    .. code-block:: python
+        :linenos:
+
+        Log(
+            Map(
+                lambda x: x * 2,
+                [1, 2, 3]
+            )
+        )
+
+        # >> [xmake.dsl] [_] [2, 4, 6]
+
+    .. code-block:: python
+        :linenos:
+
+        Log(
+            'list_of_things',
+            Map(
+                lambda x: x * 2,
+                [1, 2, 3]
+            )
+        )
+
+        # >> [xmake.dsl] [list_of_things] [2, 4, 6]
+
+    .. code-block:: python
+        :linenos:
+
+        Log(
+            'my_module',
+            'list_of_things',
+            Map(
+                lambda x: x * 2,
+                [1, 2, 3]
+            )
+        )
+
+        # >> [my_module] [list_of_things] [2, 4, 6]
+
+    """
+
     node: Op
     name: str = field(default_factory=lambda: __name__)
     msg: Optional[str] = None
@@ -681,6 +733,26 @@ class Case:
 
 @dataclass(repr=False, init=False)
 class Match(Op):
+    """
+    Pattern matching.
+
+    .. code-block:: python
+        :linenos:
+
+        Match(
+            5,
+            lambda m: [
+                Case(
+                    x > 5,
+                    x
+                ),
+                Case(
+                    True,
+                    Err('The code had not matched anything', m)
+                )
+            ]
+        )
+    """
     map: Var
     value_op: Op
     cases: List[Case]
@@ -745,6 +817,22 @@ class Match(Op):
 
 @dataclass(repr=False, init=False)
 class Fun(Op):
+    """
+    Define a lambda function
+
+    .. code-block:: python
+        :linenos:
+
+        Fun(
+            lambda a, b, c: Seq(
+                a,
+                b,
+                c
+            )
+        )
+
+    """
+
     args: List[Var]
     body: Op
 
@@ -847,6 +935,19 @@ class Call(Op):
 
 
 class Seq(Op):
+    """
+    Sequentially execute a list of operations
+
+    .. code-block:: python
+        :linenos:
+
+        Set(
+            Log('a', 1),
+            Log('b', 2),
+            Log('c', 3),
+        )
+    """
+
     ops: List[Op]
 
     def __init__(self, *ops: WT):
@@ -923,6 +1024,18 @@ class Arr(Op):
 
 
 class Map(Op):
+    """
+    Map a sequence to a sequence of new values
+
+    .. code-block:: python
+        :linenos:
+
+        Map(
+            lambda x: x * x,
+            Con([1, 2, 3),
+        )
+    """
+
     target: Var
     map: Op
     iter: Op
@@ -977,6 +1090,18 @@ class Map(Op):
 
 
 class Fil(Op):
+    """
+    Filter a sequence to a sequence of filtered values
+
+    .. code-block:: python
+        :linenos:
+
+        Map(
+            lambda x: x > 2,
+            Con([1, 2, 3),
+        )
+    """
+
     target: Var
     filter: Op
     iter: Op
