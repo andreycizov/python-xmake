@@ -57,7 +57,7 @@ def _wr(x: WT):
                 return Eval(Eval(
                     *freevars_values,
                     _enclosed(x, caller_globals),
-                )._with_loc(Loc.from_frame_idx(4)))._with_loc(Loc.from_frame_idx(4))
+                )._with_loc(Loc.from_frame_idx(4)), wrap=True)._with_loc(Loc.from_frame_idx(4))
         else:
             raise KeyError('None')
 
@@ -544,9 +544,12 @@ def _map_eval_args(iter_obj):
 class Eval(Op):
     args: List[Op]
     body: Union[str, Callable, Op]
+    wrap: bool = False
 
-    def __init__(self, *args: Union[str, Callable, Op]):
+    def __init__(self, *args: Union[str, Callable, Op], wrap=False):
         body = args[-1]
+
+        self.wrap = wrap
 
         self.body = body
         self.args = [_wr(x) for x in args[:-1]]
@@ -584,6 +587,9 @@ class Eval(Op):
 
     def post_dependencies(self, result: TRes, *pre_result: List[TRes]) -> List['Op']:
         if isinstance(self.body, Op):
+            if self.wrap:
+                result = _wr(result)
+
             if not isinstance(result, Op):
                 raise OpError(self, f'`{result}` returned to Eval is not an Op')
 
@@ -677,23 +683,27 @@ class With(Op):
         vals = []
         while len(args) > 1:
             var = args.popleft()
-            assert isinstance(var, Var), var
             vars.append(var)
             val = args.popleft()
             val = _wr(val)
-            assert isinstance(val, Op), val
             vals.append(val)
 
         try:
-            map_op = args.popleft()
+            map_op = _wr(args.popleft())
         except IndexError:
             raise OpError(self, 'With needs a body')
-
-        assert isinstance(map_op, Op), map_op
 
         self.vars = vars
         self.vals = vals
         self.map_op = map_op
+
+        for var in self.vars:
+            assert isinstance(var, Var), var
+
+        for val in self.vals:
+            assert isinstance(val, Op), val
+
+        assert isinstance(self.map_op, Op), self.map_op
 
         self.__post_init__()
 
@@ -1040,6 +1050,20 @@ class Map(Op):
     map: Op
     iter: Op
 
+    def __init__(self, *args: WT):
+        if _check_callable(args[0]):
+            tar, map, it = self.from_ext(*args)
+        else:
+            tar, map, it = args
+
+        self.target = _wr(tar)
+        self.map = _wr(map)
+        self.iter = _wr(it)
+
+        assert isinstance(self.target, Op)
+        assert isinstance(self.map, Op)
+        assert isinstance(self.iter, Op)
+
     @classmethod
     def from_ext(cls, map_fn: Callable, it: WT):
         map_arg, = _assert_callable(map_fn)
@@ -1106,16 +1130,6 @@ class Fil(Op):
     filter: Op
     iter: Op
 
-    @classmethod
-    def from_ext(cls, fil: Callable, it: WT):
-        fil_arg, = _assert_callable(fil)
-
-        target = Var(fil_arg)
-
-        fil = fil(target)
-
-        return target, fil, it
-
     def __init__(self, *args: WT):
         if _check_callable(args[0]):
             tar, fil, it = self.from_ext(*args)
@@ -1129,6 +1143,16 @@ class Fil(Op):
         assert isinstance(self.target, Op)
         assert isinstance(self.filter, Op)
         assert isinstance(self.iter, Op)
+
+    @classmethod
+    def from_ext(cls, fil: Callable, it: WT):
+        fil_arg, = _assert_callable(fil)
+
+        target = Var(fil_arg)
+
+        fil = fil(target)
+
+        return target, fil, it
 
     def dependencies(self) -> List['Op']:
         return [self.iter]
