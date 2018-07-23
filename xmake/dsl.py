@@ -34,8 +34,10 @@ def _wr(x: WT):
         for caller_idx in [3]:
             # caller_idx = 3
 
-            caller_locals = _get_caller(caller_idx)[0].f_locals
-            caller_globals = _get_caller(caller_idx)[0].f_globals
+            caller = _get_caller(caller_idx)[0]
+
+            caller_locals = caller.f_locals
+            caller_globals = caller.f_globals
             fn_freevars = x.__code__.co_freevars
 
             # print('____________________________________________________________')
@@ -193,7 +195,7 @@ class Operators:
     # sets
 
     def __contains__(self, other: 'WT'):
-        return Eval(self, other, lambda x, y: x in y)
+        return Eval(self, other, lambda x, y: y in x)
 
     # comparison
 
@@ -230,7 +232,7 @@ class Op(Operators):
         return self
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__qualname__}()'
+        return f'{self.__class__.__name__}()'
 
     @property
     def logger(self):
@@ -300,7 +302,6 @@ class Op(Operators):
         :param post_result: what is returned by every dependency returned by ``post_dependencies``
         :return:
         """
-        self.logger.getChild('post_execute').debug('%s %s', pre_result, post_result)
         return execute_ret
 
 
@@ -370,7 +371,10 @@ class Con(Op):
     value: Any
 
     def __repr__(self):
-        return f'Con({self.value})'
+        vr = repr(self.value)
+        if len(vr) > 10:
+            vr = vr[:10] + '...'
+        return f'Con({vr})'
 
     def execute(self, *args: Any) -> TRes:
         return self.value
@@ -487,7 +491,8 @@ class Log(Op):
         return [self.node]
 
     def execute(self, arg: Any) -> TRes:
-        logging.getLogger(self.name).warning('[%s] %s', self.msg if self.msg else '_', arg)
+        msg = self.msg if self.msg else '_'
+        logging.getLogger(self.name).getChild(msg).warning('[%s] %s', msg, arg)
         return arg
 
 
@@ -562,8 +567,8 @@ class Eval(Op):
         self.__post_init__()
 
     def __repr__(self) -> str:
-        args = ', '.join(repr(a) for a in self.args)
-        return f'{self.__class__.__name__}({args}, {repr(self.body)})'
+        args = ', '.join(repr(a) for a in self.args + [self.body if isinstance(self.body, Op) else self.body])
+        return f'{self.__class__.__name__}({args})'
 
     def dependencies(self) -> List['Op']:
         if isinstance(self.body, Op):
@@ -656,7 +661,7 @@ class With(Op):
     def __repr__(self):
         vals = ', '.join(f'{repr(n)}={repr(v)}' for n, v in zip(self.vars, self.vals))
         body = repr(self.map_op)
-        return f'{self.__class__.__qualname__}({vals})(<body omitted>)'
+        return f'{self.__class__.__qualname__}({vals}|{body})'
 
     @classmethod
     def from_ext(cls, *args: WT):
@@ -1003,7 +1008,20 @@ class Par(Op):
     ops: List[Op]
 
     def __init__(self, *ops: WT):
-        self.ops = [_wr(x) for x in ops]
+        if len(ops):
+            if _check_callable(ops[0]):
+                fn, = ops
+                args = _assert_callable(fn)
+                assert args == [], args
+
+                ops = fn()
+
+        wr_ops = []
+
+        for op in ops:
+            wr_ops.append(_wr(op))
+
+        self.ops = wr_ops
 
         self.__post_init__()
 
@@ -1073,20 +1091,6 @@ class Map(Op):
         map = map_fn(target)
 
         return target, map, it
-
-    def __init__(self, *args: WT):
-        if _check_callable(args[0]):
-            tar, map, it = self.from_ext(*args)
-        else:
-            tar, map, it = args
-
-        self.target = _wr(tar)
-        self.map = _wr(map)
-        self.iter = _wr(it)
-
-        assert isinstance(self.target, Op)
-        assert isinstance(self.map, Op)
-        assert isinstance(self.iter, Op)
 
     def dependencies(self) -> List['Op']:
         return [self.iter]
