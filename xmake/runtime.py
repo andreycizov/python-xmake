@@ -1,12 +1,38 @@
 from enum import Enum
-from typing import Tuple, Optional
 
 from dataclasses import dataclass, replace
+from typing import Tuple, Optional
 
 from xmake.dsl import Op, Ctx
 
 
-class Step(Enum):
+class OrderedEnum(Enum):
+    @property
+    def _order(self):
+        return list(self.__class__).index(self)
+
+    def __ge__(self, other):
+        if self.__class__ is other.__class__:
+            return self._order >= other._order
+        return NotImplemented
+
+    def __gt__(self, other):
+        if self.__class__ is other.__class__:
+            return self._order > other._order
+        return NotImplemented
+
+    def __le__(self, other):
+        if self.__class__ is other.__class__:
+            return self._order <= other._order
+        return NotImplemented
+
+    def __lt__(self, other):
+        if self.__class__ is other.__class__:
+            return self._order < other._order
+        return NotImplemented
+
+
+class Step(OrderedEnum):
     Deps = 'Deps'
     Exec = 'Exec'
     PostDeps = 'PostDeps'
@@ -30,6 +56,18 @@ JOB_STATE_PREDECESSOR = {v: k for k, v in JOB_STATE_SUCCESSOR.items()}
 JobRecID = Tuple[int, Step]
 
 
+@dataclass(frozen=True)
+class JobRecID:
+    ident: int
+    step: Step
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.ident}, {self.step})'
+
+    def with_step(self, step: Step) -> 'JobRec':
+        return replace(self, step=step)
+
+
 @dataclass()
 class JobRec:
     ident: int
@@ -39,7 +77,7 @@ class JobRec:
 
     @property
     def id(self) -> JobRecID:
-        return self.ident, self.step
+        return JobRecID(self.ident, self.step)
 
     def with_step(self, step: Step) -> 'JobRec':
         return replace(self, step=step)
