@@ -1,7 +1,7 @@
 from collections import deque
-from typing import List, Set, Dict, TypeVar, Generic, Deque, Optional, Callable
 
 from dataclasses import dataclass, field
+from typing import List, Set, Dict, TypeVar, Generic, Deque, Optional, Callable
 
 JobID = TypeVar('JobID')
 Job = TypeVar('Job')
@@ -126,6 +126,9 @@ class KeyedDeps(Generic[JobID, Job]):
         self._maybe_gc(job_id)
 
         return job, job_deps
+
+    def __getitem__(self, item):
+        return self.values[item]
 
     def __len__(self):
         return len(self.values)
